@@ -100,6 +100,11 @@ fun SettingsRoute(viewModel: SettingsViewModel = hiltViewModel()) {
         Spacer(Modifier.height(16.dp))
 
         Text("Модели распознавания", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "В APK уже встроен sherpa-onnx. Скачайте T-one (быстрый стрим) и GigaAM (пунктуация, цифры, регистр).",
+            color = NotesMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
         Spacer(Modifier.height(8.dp))
         models.forEach { state ->
             Column(

@@ -6,8 +6,12 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import com.alekseevich47.notes.data.download.ModelDownloader
 import com.alekseevich47.notes.domain.ModelKind
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OnlineRecognizer
+import com.k2fsa.sherpa.onnx.OnlineStream
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,13 +22,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Pass1: sherpa T-one streaming when available, else Android SpeechRecognizer for low-latency partials.
- * Pass2: GigaAM v3 e2e offline finalize when model + native available.
+ * Pass1: sherpa T-one streaming when model installed; else SpeechRecognizer partials.
+ * Pass2: GigaAM v3 e2e offline finalize for punctuation / digits / case.
  */
 @Singleton
 class TwoPassSttEngine @Inject constructor(
@@ -33,35 +36,42 @@ class TwoPassSttEngine @Inject constructor(
 ) : SttEngine {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _partials = MutableStateFlow("")
-    private var onlineRecognizer: Any? = null
-    private var onlineStream: Any? = null
-    private var offlineRecognizer: Any? = null
+    private var online: OnlineRecognizer? = null
+    private var stream: OnlineStream? = null
+    private var offline: OfflineRecognizer? = null
     private var speech: SpeechRecognizer? = null
-    private var committed = StringBuilder()
-    private var lastPartial = ""
+    private val committed = StringBuilder()
+    private var usingSherpa = false
 
     override val ready: Boolean
-        get() = models.isInstalled(ModelKind.T_ONE) || SpeechRecognizer.isRecognitionAvailable(context)
+        get() = models.isInstalled(ModelKind.T_ONE) ||
+            models.isInstalled(ModelKind.GIGA_AM) ||
+            SpeechRecognizer.isRecognitionAvailable(context)
+
+    fun sherpaOnlineReady(): Boolean = models.isInstalled(ModelKind.T_ONE)
+    fun sherpaOfflineReady(): Boolean = models.isInstalled(ModelKind.GIGA_AM)
 
     override fun partials(): Flow<String> = _partials.asStateFlow()
 
-    override suspend fun startSession() = withContext(Dispatchers.Main) {
-        committed.clear()
-        lastPartial = ""
-        _partials.value = ""
-        onlineRecognizer = null
-        onlineStream = null
-        offlineRecognizer = null
+    override suspend fun startSession() {
+        withContext(Dispatchers.Main) {
+            releaseSessionOnly()
+            committed.clear()
+            _partials.value = ""
+            usingSherpa = false
 
-        if (models.isInstalled(ModelKind.T_ONE) && SherpaBridge.isNativeAvailable()) {
-            onlineRecognizer = SherpaBridge.createOnlineTone(models.modelDir(ModelKind.T_ONE))
-            onlineStream = onlineRecognizer?.let { SherpaBridge.onlineCreateStream(it) }
-        }
-        if (models.isInstalled(ModelKind.GIGA_AM) && SherpaBridge.isNativeAvailable()) {
-            offlineRecognizer = SherpaBridge.createOfflineGiga(models.modelDir(ModelKind.GIGA_AM))
-        }
-        if (onlineStream == null) {
-            startSpeechRecognizer()
+            if (models.isInstalled(ModelKind.T_ONE)) {
+                online = SherpaEngineFactory.createOnlineTone(models.modelDir(ModelKind.T_ONE))
+                stream = online?.createStream()
+                usingSherpa = stream != null
+            }
+            if (models.isInstalled(ModelKind.GIGA_AM)) {
+                offline = SherpaEngineFactory.createOfflineGiga(models.modelDir(ModelKind.GIGA_AM))
+            }
+            if (!usingSherpa) {
+                startSpeechRecognizer()
+            }
+            Log.i(TAG, "session start sherpaOnline=$usingSherpa offline=${offline != null}")
         }
     }
 
@@ -75,34 +85,26 @@ class TwoPassSttEngine @Inject constructor(
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {
-                    // restart for continuous dictation
                     scope.launch(Dispatchers.Main) { restartSpeech() }
                 }
                 override fun onError(error: Int) {
                     scope.launch(Dispatchers.Main) { restartSpeech() }
                 }
                 override fun onResults(results: Bundle?) {
-                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull().orEmpty().trim()
                     if (text.isNotBlank()) {
                         if (committed.isNotEmpty()) committed.append(' ')
-                        committed.append(text.trim())
-                        lastPartial = ""
-                        _partials.value = committed.toString()
+                        committed.append(text)
+                        publish(committed.toString())
                     }
                     scope.launch(Dispatchers.Main) { restartSpeech() }
                 }
                 override fun onPartialResults(partialResults: Bundle?) {
                     val text = partialResults
                         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        .orEmpty()
-                    lastPartial = text
-                    val shown = buildString {
-                        append(committed)
-                        if (committed.isNotEmpty() && text.isNotBlank()) append(' ')
-                        append(text)
-                    }
-                    _partials.value = shown
+                        ?.firstOrNull().orEmpty()
+                    publish(join(committed.toString(), text))
                 }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
@@ -123,27 +125,23 @@ class TwoPassSttEngine @Inject constructor(
     }
 
     override suspend fun acceptPcm(samples: FloatArray, sampleRate: Int) = withContext(Dispatchers.Default) {
-        val recognizer = onlineRecognizer ?: return@withContext
-        val stream = onlineStream ?: return@withContext
-        SherpaBridge.onlineAcceptWaveform(stream, sampleRate, samples)
-        SherpaBridge.onlineDecode(recognizer, stream)
-        val text = SherpaBridge.onlineGetText(recognizer, stream).trim()
-        if (text.isNotBlank()) {
-            lastPartial = text
-            _partials.value = buildString {
-                append(committed)
-                if (committed.isNotEmpty()) append(' ')
-                append(text)
-            }
+        val recognizer = online ?: return@withContext
+        val onlineStream = stream ?: return@withContext
+        onlineStream.acceptWaveform(samples, sampleRate)
+        while (recognizer.isReady(onlineStream)) {
+            recognizer.decode(onlineStream)
         }
-        if (SherpaBridge.onlineIsEndpoint(recognizer, stream)) {
+        val text = recognizer.getResult(onlineStream).text.trim()
+        if (text.isNotBlank()) {
+            publish(join(committed.toString(), text))
+        }
+        if (recognizer.isEndpoint(onlineStream)) {
             if (text.isNotBlank()) {
                 if (committed.isNotEmpty()) committed.append(' ')
                 committed.append(text)
             }
-            SherpaBridge.onlineReset(recognizer, stream)
-            lastPartial = ""
-            _partials.value = committed.toString()
+            recognizer.reset(onlineStream)
+            publish(committed.toString())
         }
     }
 
@@ -152,37 +150,63 @@ class TwoPassSttEngine @Inject constructor(
         speech?.cancel()
         speech?.destroy()
         speech = null
-        val online = onlineRecognizer
-        val stream = onlineStream
-        if (online != null && stream != null) {
-            val text = SherpaBridge.onlineGetText(online, stream).trim()
+
+        val recognizer = online
+        val onlineStream = stream
+        if (recognizer != null && onlineStream != null) {
+            onlineStream.inputFinished()
+            while (recognizer.isReady(onlineStream)) {
+                recognizer.decode(onlineStream)
+            }
+            val text = recognizer.getResult(onlineStream).text.trim()
             if (text.isNotBlank()) {
                 if (committed.isNotEmpty()) committed.append(' ')
                 committed.append(text)
             }
         }
         val result = committed.toString().ifBlank { _partials.value }.trim()
-        _partials.value = result
+        publish(result)
         result
     }
 
     override suspend fun finalizeWithOffline(wavFile: File): String = withContext(Dispatchers.Default) {
-        val offline = offlineRecognizer
-        if (offline != null && wavFile.exists()) {
-            val polished = SherpaBridge.offlineDecodeFile(offline, wavFile.absolutePath).trim()
+        val recognizer = offline
+        if (recognizer != null && wavFile.exists()) {
+            val polished = SherpaEngineFactory.decodeWavFile(recognizer, wavFile.absolutePath)
             if (polished.isNotBlank()) {
-                _partials.value = polished
+                publish(polished)
                 return@withContext polished
             }
         }
-        finishUtterance()
+        _partials.value.trim()
     }
 
     override fun release() {
+        releaseSessionOnly()
+    }
+
+    private fun releaseSessionOnly() {
         speech?.destroy()
         speech = null
-        onlineRecognizer = null
-        onlineStream = null
-        offlineRecognizer = null
+        stream?.release()
+        stream = null
+        online?.release()
+        online = null
+        offline?.release()
+        offline = null
+    }
+
+    private fun publish(text: String) {
+        _partials.value = text
+    }
+
+    private fun join(left: String, right: String): String = buildString {
+        append(left)
+        if (left.isNotBlank() && right.isNotBlank()) append(' ')
+        append(right)
+    }
+
+    companion object {
+        private const val TAG = "TwoPassStt"
     }
 }

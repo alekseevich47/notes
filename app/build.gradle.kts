@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,33 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
+}
+
+val sherpaAarVersion = "2.0.1"
+val sherpaAarFile = file("libs/sherpa-onnx-$sherpaAarVersion.aar")
+val sherpaAarUrl =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaAarVersion/sherpa-onnx-$sherpaAarVersion.aar"
+
+fun ensureSherpaAar() {
+    if (sherpaAarFile.exists() && sherpaAarFile.length() > 1_000_000L) return
+    sherpaAarFile.parentFile.mkdirs()
+    val tmp = file("${sherpaAarFile.absolutePath}.part")
+    logger.lifecycle("Downloading sherpa-onnx $sherpaAarVersion AAR…")
+    // Avoid java.net.* FQNs: `java` is shadowed by the Android/Java extension in Kotlin DSL.
+    URI(sherpaAarUrl).toURL().openStream().use { input ->
+        tmp.outputStream().use { output -> input.copyTo(output) }
+    }
+    require(tmp.length() > 1_000_000L) { "Downloaded sherpa AAR looks too small" }
+    if (sherpaAarFile.exists()) sherpaAarFile.delete()
+    check(tmp.renameTo(sherpaAarFile)) { "Failed to move sherpa AAR into place" }
+}
+
+ensureSherpaAar()
+
+tasks.register("downloadSherpaAar") {
+    group = "setup"
+    description = "Download sherpa-onnx Android AAR if missing"
+    doLast { ensureSherpaAar() }
 }
 
 android {
@@ -15,8 +44,8 @@ android {
         applicationId = "com.alekseevich47.notes"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -106,6 +135,8 @@ dependencies {
     implementation("dev.chrisbanes.haze:haze:1.5.2")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    implementation(files(sherpaAarFile))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

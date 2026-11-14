@@ -37,11 +37,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.alekseevich47.notes.domain.NoteBody
@@ -71,6 +77,10 @@ fun RichNoteEditor(
     var unlockHidden by remember { mutableStateOf(false) }
     var askPin by remember { mutableStateOf(false) }
 
+    val transformation = remember(body.spans, unlockHidden) {
+        SpanVisualTransformation(body.spans, revealHidden = unlockHidden)
+    }
+
     Column(modifier = modifier) {
         OutlinedTextField(
             value = title,
@@ -83,13 +93,17 @@ fun RichNoteEditor(
         )
         Spacer(Modifier.height(12.dp))
         FormatToolbar(
-            onBold = { onBodyChange(body.toggleSpan(value.selection) { it.copy(bold = !it.bold) }) },
-            onItalic = { onBodyChange(body.toggleSpan(value.selection) { it.copy(italic = !it.italic) }) },
-            onStrike = { onBodyChange(body.toggleSpan(value.selection) { it.copy(strike = !it.strike) }) },
-            onUnderline = { onBodyChange(body.toggleSpan(value.selection) { it.copy(underline = !it.underline) }) },
+            onBold = { onBodyChange(body.toggleSpan(value.selection) { it.copy(bold = true) }) },
+            onItalic = { onBodyChange(body.toggleSpan(value.selection) { it.copy(italic = true) }) },
+            onStrike = { onBodyChange(body.toggleSpan(value.selection) { it.copy(strike = true) }) },
+            onUnderline = { onBodyChange(body.toggleSpan(value.selection) { it.copy(underline = true) }) },
             onHidden = {
-                if (pinHash.isNullOrBlank()) onNeedPinSetup()
-                else onBodyChange(body.toggleSpan(value.selection) { it.copy(hidden = true) })
+                if (value.selection.collapsed) return@FormatToolbar
+                if (pinHash.isNullOrBlank()) {
+                    onNeedPinSetup()
+                } else {
+                    onBodyChange(body.toggleSpan(value.selection) { it.copy(hidden = true) })
+                }
             },
             onList = {
                 val t = value.text
@@ -97,8 +111,7 @@ fun RichNoteEditor(
                 val lineStart = t.lastIndexOf('\n', (start - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
                 if (!t.substring(lineStart).startsWith("1.")) {
                     val next = t.substring(0, lineStart) + "1. " + t.substring(lineStart)
-                    val vf = TextFieldValue(next, TextRange(lineStart + 3))
-                    value = vf
+                    value = TextFieldValue(next, TextRange(lineStart + 3))
                     onBodyChange(body.copy(text = next))
                 }
             },
@@ -121,10 +134,20 @@ fun RichNoteEditor(
                         TextFieldValue(transformed.first, TextRange(transformed.second))
                     } else next
                     value = vf
-                    onBodyChange(body.copy(text = vf.text))
+                    onBodyChange(
+                        body.copy(
+                            text = vf.text,
+                            spans = body.spans.mapNotNull { span ->
+                                val end = span.end.coerceAtMost(vf.text.length)
+                                val start = span.start.coerceAtMost(end)
+                                if (start >= end) null else span.copy(start = start, end = end)
+                            },
+                        ),
+                    )
                 },
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                visualTransformation = transformation,
                 modifier = Modifier.fillMaxWidth(),
                 decorationBox = { inner ->
                     if (value.text.isEmpty()) {
@@ -135,18 +158,16 @@ fun RichNoteEditor(
             )
         }
 
-        if (body.spans.any { it.hidden }) {
+        val hiddenSpans = body.spans.filter { it.hidden }
+        if (hiddenSpans.isNotEmpty() && !unlockHidden) {
             Spacer(Modifier.height(8.dp))
             Text(
-                text = if (unlockHidden) "Скрытый текст открыт" else "Есть скрытый текст — нажмите, чтобы открыть",
+                text = "Скрытый текст · нажмите, чтобы открыть",
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable {
-                        if (unlockHidden) return@clickable
-                        askPin = true
-                    }
-                    .blur(if (unlockHidden) 0.dp else 6.dp)
+                    .clickable { askPin = true }
+                    .blur(8.dp)
                     .padding(12.dp),
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -205,6 +226,37 @@ fun RichNoteEditor(
                 }
             },
         )
+    }
+}
+
+private class SpanVisualTransformation(
+    private val spans: List<RichSpan>,
+    private val revealHidden: Boolean,
+) : VisualTransformation {
+    override fun filter(text: androidx.compose.ui.text.AnnotatedString): TransformedText {
+        val annotated = buildAnnotatedString {
+            append(text.text)
+            spans.forEach { span ->
+                val start = span.start.coerceIn(0, text.length)
+                val end = span.end.coerceIn(start, text.length)
+                if (start >= end) return@forEach
+                if (span.bold) addStyle(SpanStyle(fontWeight = FontWeight.Bold), start, end)
+                if (span.italic) addStyle(SpanStyle(fontStyle = FontStyle.Italic), start, end)
+                if (span.strike) addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), start, end)
+                if (span.underline) addStyle(SpanStyle(textDecoration = TextDecoration.Underline), start, end)
+                if (span.hidden && !revealHidden) {
+                    addStyle(
+                        SpanStyle(
+                            color = Color.Transparent,
+                            background = Color(0xFF2A2A2A),
+                        ),
+                        start,
+                        end,
+                    )
+                }
+            }
+        }
+        return TransformedText(annotated, OffsetMapping.Identity)
     }
 }
 
@@ -271,6 +323,8 @@ private fun NoteBody.toggleSpan(selection: TextRange, transform: (RichSpan) -> R
     if (selection.collapsed) return this
     val start = selection.min
     val end = selection.max
-    val base = RichSpan(start, end)
-    return copy(spans = spans.filterNot { it.start == start && it.end == end } + transform(base))
+    val existing = spans.firstOrNull { it.start == start && it.end == end }
+    val base = existing ?: RichSpan(start, end)
+    val next = transform(base)
+    return copy(spans = spans.filterNot { it.start == start && it.end == end } + next)
 }

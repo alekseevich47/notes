@@ -17,3 +17,5 @@
 keystore.properties
 *.jks
 *.keystore
+/app/libs/*.aar
+/app/libs/*.aar.part

@@ -40,7 +40,7 @@ class WidgetUpdater @Inject constructor(
 
     fun bind(views: RemoteViews, state: RecordingUiState, wide: Boolean) {
         val icon = when {
-            state.processing -> R.drawable.ic_processing_dots
+            state.processing -> R.drawable.ic_processing_anim
             state.done -> R.drawable.ic_check_circle
             state.active -> R.drawable.ic_mic_recording
             else -> R.drawable.ic_mic_outline
