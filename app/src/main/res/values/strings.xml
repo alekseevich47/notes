@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Заметки</string>
+    <string name="widget_2x2_label">Заметки · микрофон</string>
+    <string name="widget_4x2_label">Заметки · микрофон + текст</string>
+    <string name="recording_channel">Запись заметки</string>
+    <string name="recording_notification_title">Идёт запись</string>
+    <string name="recording_notification_text">Нажмите, чтобы открыть</string>
+    <string name="note_ready_title">Заметка готова</string>
+    <string name="tab_notes">Заметки</string>
+    <string name="tab_settings">Настройки</string>
+</resources>

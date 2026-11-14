@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#2A1740</color>
+    <color name="notes_violet">#5B2A86</color>
+    <color name="notes_violet_deep">#3A1858</color>
+    <color name="notes_violet_glow">#7B3FA8</color>
+    <color name="widget_bg">#1A1028</color>
+    <color name="widget_text">#F5EEFF</color>
+    <color name="widget_text_dim">#99F5EEFF</color>
+</resources>
