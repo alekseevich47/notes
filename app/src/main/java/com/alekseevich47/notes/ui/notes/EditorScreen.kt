@@ -37,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -46,6 +47,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -58,7 +61,9 @@ import com.alekseevich47.notes.ui.components.PinDialog
 import com.alekseevich47.notes.ui.components.TableSizeDialog
 import com.alekseevich47.notes.ui.editor.EditorFormatBar
 import com.alekseevich47.notes.ui.editor.NoteEditorController
+import com.alekseevich47.notes.ui.editor.NoteSurfaceBridge
 import com.alekseevich47.notes.ui.editor.RichNoteEditor
+import com.alekseevich47.notes.ui.editor.observeSelectionTaps
 import com.alekseevich47.notes.ui.editor.TableGrid
 import com.alekseevich47.notes.ui.player.MiniPlayer
 import com.alekseevich47.notes.ui.theme.NotesFont
@@ -87,6 +92,14 @@ fun EditorScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val scroll = rememberScrollState()
     val bodyTap = remember { MutableInteractionSource() }
+    val surface = remember { NoteSurfaceBridge() }
+    var bodyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    SideEffect {
+        surface.toRoot = { local ->
+            val coords = bodyCoords
+            if (coords != null && coords.isAttached) coords.localToRoot(local) else null
+        }
+    }
     val context = LocalContext.current
 
     LaunchedEffect(noteId) {
@@ -156,6 +169,8 @@ fun EditorScreen(
                         .fillMaxWidth()
                         .verticalScroll(scroll)
                         .heightIn(min = minBody)
+                        .onGloballyPositioned { bodyCoords = it }
+                        .observeSelectionTaps(surface)
                         .clickable(
                             interactionSource = bodyTap,
                             indication = null,
@@ -176,6 +191,7 @@ fun EditorScreen(
                                 focusRequester = bodyFocus,
                                 formats = formats,
                                 pinDialogVisible = askPin,
+                                surface = surface,
                             )
                         }
                         current.document.tables.forEach { table ->

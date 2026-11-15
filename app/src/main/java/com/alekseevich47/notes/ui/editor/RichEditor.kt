@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.ui.editor
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,16 +21,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -77,7 +82,7 @@ private val FrostPlateDark = Color(0xFF3C3850)
 private val numberedLine = Regex("""^\d+\.\s?.*""")
 
 @Composable
-fun RichNoteEditor(
+internal fun RichNoteEditor(
     document: NoteDocument,
     hiddenUnlocked: Boolean,
     onDocument: (NoteDocument) -> Unit,
@@ -87,13 +92,17 @@ fun RichNoteEditor(
     focusRequester: FocusRequester,
     formats: NoteEditorController,
     pinDialogVisible: Boolean,
+    surface: NoteSurfaceBridge,
     modifier: Modifier = Modifier,
 ) {
     var field by remember {
         mutableStateOf(TextFieldValue(document.text, TextRange(document.text.length)))
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var textCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var menuOverflow by remember { mutableStateOf(false) }
+    var menuVisible by remember { mutableStateOf(false) }
+    var blockMenu by remember { mutableStateOf(false) }
     val prompt = remember { HiddenPromptGuard() }
     val clipboard = LocalClipboardManager.current
     val platformToolbar = LocalTextToolbar.current
@@ -102,7 +111,16 @@ fun RichNoteEditor(
     val dark = (0.2126f * background.red + 0.7152f * background.green + 0.0722f * background.blue) < 0.4f
     val censorLayout = layout
     val censor = !hiddenUnlocked && document.marks.any { it.style == MarkStyle.HIDDEN }
-    if (field.selection.collapsed && menuOverflow) menuOverflow = false
+    if (field.selection.collapsed && (menuOverflow || menuVisible)) {
+        menuOverflow = false
+        menuVisible = false
+    }
+    LaunchedEffect(blockMenu) {
+        if (blockMenu) {
+            withFrameNanos { }
+            blockMenu = false
+        }
+    }
     if (pinDialogVisible) {
         prompt.dialogOpen = true
     } else if (prompt.dialogOpen) {
@@ -116,14 +134,43 @@ fun RichNoteEditor(
         onRequestUnlock()
     }
 
+    fun hideMenu() {
+        menuVisible = false
+        menuOverflow = false
+    }
+
     fun publish(previous: String, edit: ListAutoFormat.Edit) {
         field = TextFieldValue(edit.text, TextRange(edit.cursor.coerceIn(0, edit.text.length)))
+        if (field.selection.collapsed) hideMenu()
         onDocument(
             document.copy(
                 text = edit.text,
                 marks = MarkEdits.shift(document.marks, previous, edit.text),
             ),
         )
+    }
+
+    fun collapseSelection() {
+        blockMenu = true
+        if (!field.selection.collapsed) {
+            field = field.copy(selection = TextRange(field.selection.end))
+        }
+        hideMenu()
+    }
+
+    fun placeCaret(offset: Int) {
+        val cursor = offset.coerceIn(0, field.text.length)
+        blockMenu = true
+        field = field.copy(selection = TextRange(cursor))
+        hideMenu()
+        if (
+            !hiddenUnlocked &&
+            HiddenText.cursorInside(document.marks, cursor, cursor) &&
+            prompt.armed &&
+            !prompt.dialogOpen
+        ) {
+            requestUnlock()
+        }
     }
 
     fun applyMark(style: MarkStyle) {
@@ -134,6 +181,7 @@ fun RichNoteEditor(
             return
         }
         onDocument(document.copy(marks = MarkEdits.toggle(document.marks, style, start, end)))
+        hideMenu()
     }
 
     fun toggleList() {
@@ -155,6 +203,7 @@ fun RichNoteEditor(
             return
         }
         clipboard.setText(AnnotatedString(field.text.substring(start, end)))
+        hideMenu()
     }
 
     fun cutSelection() {
@@ -169,13 +218,38 @@ fun RichNoteEditor(
         clipboard.setText(AnnotatedString(previous.substring(start, end)))
         val proposed = previous.removeRange(start, end)
         publish(previous, ListAutoFormat.afterEdit(previous, proposed, start))
+        hideMenu()
     }
 
     fun selectAll() {
         field = field.copy(selection = TextRange(0, field.text.length))
+        hideMenu()
     }
 
     SideEffect {
+        surface.readSelection = { SelectionSnapshot(field.selection.start, field.selection.end) }
+        surface.pointInside = { root, selection ->
+            val coords = textCoordinates
+            val result = layout
+            if (coords == null || !coords.isAttached || result == null) {
+                false
+            } else {
+            val local = root - coords.localToRoot(Offset.Zero)
+            val start = min(selection.start, selection.end)
+            val end = max(selection.start, selection.end)
+            pointInsideSelection(local.x, local.y, bandsFor(result, start, end))
+            }
+        }
+        surface.onClear = { root, _ ->
+            val coords = textCoordinates
+            val result = layout
+            if (coords == null || !coords.isAttached || result == null) {
+                collapseSelection()
+            } else {
+                val local = root - coords.localToRoot(Offset.Zero)
+                placeCaret(result.getOffsetForPosition(local))
+            }
+        }
         formats.bold = { applyMark(MarkStyle.BOLD) }
         formats.italic = { applyMark(MarkStyle.ITALIC) }
         formats.underline = { applyMark(MarkStyle.UNDERLINE) }
@@ -185,6 +259,10 @@ fun RichNoteEditor(
         formats.table = onAskTable
         formats.activeStyles = stylesTouching(document.marks, field.selection)
         formats.listActive = lineNumbered(field.text, field.selection.min)
+    }
+
+    BackHandler(enabled = !field.selection.collapsed || menuVisible) {
+        collapseSelection()
     }
 
     Column(modifier.fillMaxWidth()) {
@@ -206,6 +284,13 @@ fun RichNoteEditor(
                     value = field,
                     onValueChange = { next ->
                         val previous = field.text
+                        val previousSelection = field.selection
+                        if (blockMenu && next.text == previous) {
+                            field = field.copy(selection = previousSelection)
+                            hideMenu()
+                            return@BasicTextField
+                        }
+                        if (blockMenu) blockMenu = false
                         val textHitsHidden = HiddenText.editTouches(document.marks, previous, next.text)
                         val cursorInHidden = HiddenText.cursorInside(
                             document.marks,
@@ -223,6 +308,11 @@ fun RichNoteEditor(
                         val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end)
                         val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
                         field = next.copy(text = edit.text, selection = selection)
+                        if (selection.collapsed) {
+                            hideMenu()
+                        } else if (selection != previousSelection) {
+                            menuVisible = true
+                        }
                         onDocument(
                             document.copy(
                                 text = edit.text,
@@ -242,6 +332,7 @@ fun RichNoteEditor(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onGloballyPositioned { textCoordinates = it }
                         .focusRequester(focusRequester)
                         .onFocusChanged { formats.bodyFocused = it.isFocused }
                         .drawWithContent {
@@ -277,7 +368,7 @@ fun RichNoteEditor(
             val shown = layout?.takeIf {
                 !field.selection.collapsed && it.layoutInput.text.isNotEmpty()
             }
-            if (shown != null) {
+            if (shown != null && menuVisible) {
                 val length = shown.layoutInput.text.length
                 val start = field.selection.min.coerceIn(0, length)
                 val end = field.selection.max.coerceIn(0, length)
@@ -289,6 +380,7 @@ fun RichNoteEditor(
                         onCut = { cutSelection() },
                         onCopy = { copySelection() },
                         onMore = { menuOverflow = true },
+                        onDismiss = { if (menuVisible) collapseSelection() },
                         onBack = { menuOverflow = false },
                         onHidden = { applyMark(MarkStyle.HIDDEN) },
                         onSelectAll = { selectAll() },
@@ -341,6 +433,23 @@ private class RoutingTextToolbar(
             platform.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested)
         }
     }
+}
+
+private fun bandsFor(layout: TextLayoutResult, start: Int, end: Int): List<SelectionBand> {
+    val length = layout.layoutInput.text.length
+    if (length == 0 || layout.lineCount == 0) return emptyList()
+    return selectionBands(
+        selectionStart = start.coerceIn(0, length),
+        selectionEnd = end.coerceIn(0, length),
+        lineCount = layout.lineCount,
+        lineStart = { layout.getLineStart(it) },
+        lineEnd = { layout.getLineEnd(it, visibleEnd = false) },
+        lineTop = { layout.getLineTop(it) },
+        lineBottom = { layout.getLineBottom(it) },
+        lineLeft = { layout.getLineLeft(it) },
+        lineRight = { layout.getLineRight(it) },
+        xForOffset = { offset -> layout.getHorizontalPosition(offset.coerceIn(0, length), true) },
+    )
 }
 
 private fun stylesTouching(marks: List<TextMark>, selection: TextRange): Set<MarkStyle> {

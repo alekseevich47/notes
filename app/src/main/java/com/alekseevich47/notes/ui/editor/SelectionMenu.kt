@@ -43,7 +43,8 @@ import kotlin.math.min
 
 /**
  * Telegram-style selection bubble. Primary row is Cut / Copy / overflow.
- * Overflow has formatting and select-all, then Back. Quote is intentionally absent.
+ * Overflow starts with «Выбрать всё», then hidden text and styles, then Back.
+ * Quote is intentionally absent.
  */
 @Composable
 fun SelectionActionsPopup(
@@ -53,6 +54,7 @@ fun SelectionActionsPopup(
     onCut: () -> Unit,
     onCopy: () -> Unit,
     onMore: () -> Unit,
+    onDismiss: () -> Unit,
     onBack: () -> Unit,
     onHidden: () -> Unit,
     onSelectAll: () -> Unit,
@@ -83,7 +85,7 @@ fun SelectionActionsPopup(
                 )
             }
         },
-        onDismissRequest = onBack,
+        onDismissRequest = onDismiss,
         properties = PopupProperties(
             focusable = false,
             dismissOnBackPress = false,
@@ -203,8 +205,8 @@ private fun OverflowMenu(
     BoxWithConstraints(Modifier.widthIn(min = 212.dp, max = 280.dp)) {
         val extraStyles = maxHeight >= 360.dp
         Column(Modifier.fillMaxWidth()) {
+        OverflowLabel("Выбрать всё", onSelectAll)
         OverflowLabel("Скрытый", onHidden)
-        OverflowLabel("Выбрать все", onSelectAll)
         OverflowLabel("Жирный", onBold)
         OverflowLabel("Курсив", onItalic)
         if (extraStyles) {
