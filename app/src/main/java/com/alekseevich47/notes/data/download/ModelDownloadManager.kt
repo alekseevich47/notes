@@ -7,6 +7,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.ModelDownloadWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +65,7 @@ class ModelDownloadManager @Inject constructor(
     }
 
     fun recoverInterrupted() {
+        AppLog.i(TAG, "recover begin")
         ModelKind.entries.forEach { kind ->
             if (isInstalled(kind)) {
                 writeStatus(kind, DownloadStatus.INSTALLED, null)
@@ -73,20 +75,25 @@ class ModelDownloadManager @Inject constructor(
             val partial = hasPartial(kind)
             if (status == DownloadStatus.DOWNLOADING || (status == DownloadStatus.FAILED && partial)) {
                 controls[kind] = Control.RUN
+                AppLog.i(TAG, "resume $kind recover")
                 enqueue(kind, ExistingWorkPolicy.KEEP)
             }
         }
         refresh()
+        AppLog.i(TAG, "recover end")
     }
 
     fun start(kind: ModelKind) {
         if (isInstalled(kind)) {
             publish(kind, DownloadStatus.INSTALLED, 1f, null)
+            AppLog.i(TAG, "start $kind skipped installed")
             return
         }
+        val resuming = readStatus(kind) == DownloadStatus.PAUSED || hasPartial(kind)
         controls[kind] = Control.RUN
         writeStatus(kind, DownloadStatus.DOWNLOADING, null)
         publish(kind, DownloadStatus.DOWNLOADING, currentProgress(kind), null)
+        AppLog.i(TAG, if (resuming) "resume $kind" else "start $kind")
         enqueue(kind, ExistingWorkPolicy.REPLACE)
     }
 
@@ -94,6 +101,7 @@ class ModelDownloadManager @Inject constructor(
         controls[kind] = Control.PAUSE
         writeStatus(kind, DownloadStatus.PAUSED, null)
         publish(kind, DownloadStatus.PAUSED, currentProgress(kind), null)
+        AppLog.i(TAG, "pause $kind")
         WorkManager.getInstance(context).cancelUniqueWork(workName(kind))
     }
 
@@ -102,6 +110,7 @@ class ModelDownloadManager @Inject constructor(
         deleteIncomplete(kind)
         writeStatus(kind, DownloadStatus.NOT_INSTALLED, null)
         publish(kind, DownloadStatus.NOT_INSTALLED, 0f, null)
+        AppLog.i(TAG, "stop $kind")
         WorkManager.getInstance(context).cancelUniqueWork(workName(kind))
     }
 
@@ -110,15 +119,23 @@ class ModelDownloadManager @Inject constructor(
         directory(kind).deleteRecursively()
         writeStatus(kind, DownloadStatus.NOT_INSTALLED, null)
         publish(kind, DownloadStatus.NOT_INSTALLED, 0f, null)
+        AppLog.i(TAG, "delete $kind")
         WorkManager.getInstance(context).cancelUniqueWork(workName(kind))
     }
 
     suspend fun execute(kind: ModelKind): DownloadOutcome = gate.withLock {
-        if (controls[kind] == Control.PAUSE) return DownloadOutcome.PAUSED
-        if (controls[kind] == Control.STOP) return DownloadOutcome.STOPPED
+        if (controls[kind] == Control.PAUSE) {
+            AppLog.i(TAG, "paused $kind")
+            return DownloadOutcome.PAUSED
+        }
+        if (controls[kind] == Control.STOP) {
+            AppLog.i(TAG, "stopped $kind")
+            return DownloadOutcome.STOPPED
+        }
         if (isInstalled(kind)) {
             publish(kind, DownloadStatus.INSTALLED, 1f, null)
             writeStatus(kind, DownloadStatus.INSTALLED, null)
+            AppLog.i(TAG, "done $kind")
             return DownloadOutcome.DONE
         }
         controls.putIfAbsent(kind, Control.RUN)
@@ -141,19 +158,28 @@ class ModelDownloadManager @Inject constructor(
                 if (!isInstalled(kind)) error("Файлы модели не собрались")
                 publish(kind, DownloadStatus.INSTALLED, 1f, null)
                 writeStatus(kind, DownloadStatus.INSTALLED, null)
+                AppLog.i(TAG, "done $kind")
                 return@withContext DownloadOutcome.DONE
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                if (controls[kind] == Control.PAUSE) return@withContext DownloadOutcome.PAUSED
-                if (controls[kind] == Control.STOP) return@withContext DownloadOutcome.STOPPED
+                if (controls[kind] == Control.PAUSE) {
+                    AppLog.i(TAG, "paused $kind")
+                    return@withContext DownloadOutcome.PAUSED
+                }
+                if (controls[kind] == Control.STOP) {
+                    AppLog.i(TAG, "stopped $kind")
+                    return@withContext DownloadOutcome.STOPPED
+                }
                 attempt++
                 if (attempt >= 5) {
                     val message = error.message ?: "Сеть прервалась"
                     publish(kind, DownloadStatus.FAILED, currentProgress(kind), message)
                     writeStatus(kind, DownloadStatus.FAILED, message)
+                    AppLog.e(TAG, "fail $kind", error)
                     return@withContext if (error is IOException) DownloadOutcome.RETRY else DownloadOutcome.FAILED
                 }
+                AppLog.w(TAG, "retry $kind attempt=$attempt ${error.javaClass.simpleName}")
                 kotlinx.coroutines.delay(700L * attempt)
             }
         }
@@ -166,12 +192,14 @@ class ModelDownloadManager @Inject constructor(
             Control.PAUSE -> {
                 publish(kind, DownloadStatus.PAUSED, currentProgress(kind), null)
                 writeStatus(kind, DownloadStatus.PAUSED, null)
+                AppLog.i(TAG, "paused $kind")
                 DownloadOutcome.PAUSED
             }
             Control.STOP -> {
                 deleteIncomplete(kind)
                 publish(kind, DownloadStatus.NOT_INSTALLED, 0f, null)
                 writeStatus(kind, DownloadStatus.NOT_INSTALLED, null)
+                AppLog.i(TAG, "stopped $kind")
                 DownloadOutcome.STOPPED
             }
             else -> null
@@ -391,5 +419,9 @@ class ModelDownloadManager @Inject constructor(
 
     private fun clearTotal(partial: File) {
         totalSidecar(partial).delete()
+    }
+
+    private companion object {
+        const val TAG = "ModelDownload"
     }
 }

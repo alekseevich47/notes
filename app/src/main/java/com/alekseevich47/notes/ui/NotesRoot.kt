@@ -21,6 +21,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.DateRangeModal
 import com.alekseevich47.notes.ui.components.GlassBottomBar
@@ -69,7 +70,15 @@ fun NotesRoot(
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     }
     val permissionState = rememberMultiplePermissionsState(permissions) { result ->
-        if (result[Manifest.permission.RECORD_AUDIO] == true) shell.toggleRecording()
+        val micGranted = result[Manifest.permission.RECORD_AUDIO] == true
+        val notifications = result[Manifest.permission.POST_NOTIFICATIONS]
+        val notificationText = when (notifications) {
+            true -> "granted"
+            false -> "denied"
+            null -> "n/a"
+        }
+        AppLog.i("Permissions", "mic ${if (micGranted) "granted" else "denied"} notifications $notificationText")
+        if (micGranted) shell.toggleRecording()
         else shell.toast(micDenied)
     }
 

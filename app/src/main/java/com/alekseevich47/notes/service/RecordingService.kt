@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.alekseevich47.notes.MainActivity
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.stt.RecordingSession
 import com.alekseevich47.notes.ui.widgets.WidgetUpdater
 import dagger.hilt.android.AndroidEntryPoint
@@ -53,10 +54,12 @@ class RecordingService : Service() {
             }
         }
         if (!hasMicPermission()) {
+            AppLog.i("RecordingService", "mic permission denied")
             openAppForPermission()
             stopSelf()
             return START_NOT_STICKY
         }
+        AppLog.i("RecordingService", "mic permission granted")
         startInForeground(recordingNotification("Идёт запись…"))
         if (job?.isActive != true) {
             acquireWake()

@@ -14,6 +14,7 @@ import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.domain.NoteDocument
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.widgets.WidgetUpdater
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineStream
@@ -60,10 +61,12 @@ class RecordingSession @Inject constructor(
 
     fun requestStop() {
         stopRequested.set(true)
+        AppLog.i(TAG, "stop requested phase=${_phase.value}")
     }
 
     suspend fun recordAndSave(): Long? {
         if (isBusy) {
+            AppLog.i(TAG, "recordAndSave busy phase=${_phase.value}")
             active?.await()
             return _noteId.value
         }
@@ -74,8 +77,10 @@ class RecordingSession @Inject constructor(
         _text.value = ""
         _level.value = 0f
         var noteId: Long? = null
+        var audioBase: String? = null
         try {
             _phase.value = MicPhase.RECORDING
+            AppLog.i(TAG, "phase RECORDING")
             pushWidgets()
             val recordingsDir = File(context.filesDir, "recordings")
             if (!recordingsDir.exists()) {
@@ -84,6 +89,7 @@ class RecordingSession @Inject constructor(
                 }
             }
             val file = File(recordingsDir, "note-${System.currentTimeMillis()}.wav")
+            audioBase = file.name
             // Soft beep after the target path is ready — never block mic open on STT init.
             withContext(Dispatchers.Default) { SoftBeep.play() }
             delay(80)
@@ -121,6 +127,7 @@ class RecordingSession @Inject constructor(
                 runCatching { online?.release() }
             }
             _phase.value = MicPhase.PROCESSING
+            AppLog.i(TAG, "phase PROCESSING bytes=${file.length()}")
             _level.value = 0f
             pushWidgets()
             val finalized = finalize(file, captured)
@@ -129,13 +136,20 @@ class RecordingSession @Inject constructor(
             noteId = repository.create(document = document, audioPath = file.absolutePath)
             _noteId.value = noteId
             _phase.value = MicPhase.DONE
+            AppLog.i(TAG, "phase DONE bytes=${file.length()}")
             pushWidgets()
             delay(800)
             _phase.value = MicPhase.IDLE
+            AppLog.i(TAG, "phase IDLE")
             _level.value = 0f
             pushWidgets()
         } catch (error: Throwable) {
             Log.e(TAG, "recording failed", error)
+            if (error is kotlinx.coroutines.CancellationException) {
+                AppLog.i(TAG, "phase IDLE cancelled")
+            } else {
+                AppLog.e(TAG, "phase IDLE recording failed file=${audioBase ?: "-"}", error)
+            }
             _messages.tryEmit(error.message ?: "Не удалось записать заметку")
             _phase.value = MicPhase.IDLE
             _level.value = 0f

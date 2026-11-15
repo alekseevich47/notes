@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.domain.MicPhase
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.PlaybackService
 import com.alekseevich47.notes.service.RecordingService
 import com.alekseevich47.notes.stt.RecordingSession
@@ -38,15 +39,26 @@ class ShellViewModel @Inject constructor(
     val toast: StateFlow<String?> = _toast.asStateFlow()
 
     init {
+        AppLog.i(TAG, "screen enter ${Screen.LIST}")
         viewModelScope.launch {
             session.messages.collect { message -> _toast.value = message }
         }
     }
 
-    fun showList() = _ui.update { it.copy(screen = Screen.LIST) }
-    fun showSettings() = _ui.update { it.copy(screen = Screen.SETTINGS) }
+    fun showList() = navigate(Screen.LIST) { it.copy(screen = Screen.LIST) }
+    fun showSettings() = navigate(Screen.SETTINGS) { it.copy(screen = Screen.SETTINGS) }
 
-    fun openEditor(id: Long) = _ui.update { it.copy(screen = Screen.EDITOR, editorId = id) }
+    fun openEditor(id: Long) = navigate(Screen.EDITOR) { it.copy(screen = Screen.EDITOR, editorId = id) }
+
+    private fun navigate(next: Screen, reduce: (ShellUi) -> ShellUi) {
+        val previous = _ui.value
+        _ui.update(reduce)
+        val editorChanged = next == Screen.EDITOR && previous.editorId != _ui.value.editorId
+        if (previous.screen != next || editorChanged) {
+            AppLog.i(TAG, "screen exit ${previous.screen}")
+            AppLog.i(TAG, "screen enter $next")
+        }
+    }
 
     fun createManual() {
         viewModelScope.launch {
@@ -84,5 +96,9 @@ class ShellViewModel @Inject constructor(
 
     fun onNoteReady(id: Long?) {
         if (id != null && session.phase.value == MicPhase.DONE) openEditor(id)
+    }
+
+    private companion object {
+        const val TAG = "Shell"
     }
 }

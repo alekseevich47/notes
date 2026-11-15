@@ -33,6 +33,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.data.download.DownloadStatus
 import com.alekseevich47.notes.data.download.ModelCardState
 import com.alekseevich47.notes.domain.ThemeMode
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.components.PinDialog
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
@@ -119,6 +120,12 @@ fun SettingsScreen(
         }
         LinkText("Telegram") {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/aalekseevich47")))
+        }
+        Spacer(Modifier.height(22.dp))
+        SectionLabel("Диагностика")
+        ActionText("Отправить лог") {
+            runCatching { AppLog.share(context) }
+                .onFailure { onToast("Не удалось отправить лог") }
         }
     }
 
