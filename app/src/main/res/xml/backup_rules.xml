@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="sharedpref" path="notes_secure.xml" />
+    <exclude domain="sharedpref" path="notes_secure_fallback.xml" />
+    <exclude domain="file" path="models/" />
+    <exclude domain="file" path="recordings/" />
+</full-backup-content>

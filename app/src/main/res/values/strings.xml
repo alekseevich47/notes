@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Заметки</string>
+    <string name="widget_2x2_name">Микрофон</string>
+    <string name="widget_4x2_name">Микрофон и текст</string>
+    <string name="widget_2x2_desc">Круглая кнопка записи заметки</string>
+    <string name="widget_4x2_desc">Запись с живым текстом</string>
+    <string name="channel_recording">Запись заметки</string>
+    <string name="channel_ready">Готовые заметки</string>
+    <string name="channel_playback">Воспроизведение</string>
+    <string name="cd_mic">Микрофон</string>
+    <string name="cd_search">Поиск</string>
+    <string name="cd_calendar">Фильтр по дате</string>
+    <string name="cd_add">Новая заметка</string>
+</resources>

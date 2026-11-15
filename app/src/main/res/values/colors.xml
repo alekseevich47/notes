@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple">#FF6C4CFF</color>
+    <color name="purple_deep">#FF2A165F</color>
+    <color name="ic_launcher_background">#FF6C4CFF</color>
+    <color name="widget_bg">#FFF6F4FB</color>
+    <color name="widget_text">#FF1B1430</color>
+    <color name="widget_muted">#FF8A809E</color>
+    <color name="widget_mic_idle">#FFE4DCFF</color>
+    <color name="widget_mic_rec">#FF3A237A</color>
+</resources>
