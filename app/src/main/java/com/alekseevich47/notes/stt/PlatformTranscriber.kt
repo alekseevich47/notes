@@ -28,6 +28,7 @@ class PlatformTranscriber(
     private val appContext = context.applicationContext
     private var recognizer: SpeechRecognizer? = null
     private var running = false
+    private var sessionOpen = false
     private var committed = ""
     private var partial = ""
 
@@ -63,6 +64,7 @@ class PlatformTranscriber(
 
     private fun listen() {
         if (!running) return
+        sessionOpen = true
         val speech = recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
             recognizer = it
             it.setRecognitionListener(listener)
@@ -81,7 +83,7 @@ class PlatformTranscriber(
     }
 
     private fun publish() {
-        onText(listOf(committed, partial).filter { it.isNotBlank() }.joinToString(" ").trim())
+        onText(LiveTranscript(committed, partial).display)
     }
 
     private val listener = object : RecognitionListener {
@@ -92,6 +94,7 @@ class PlatformTranscriber(
         override fun onEndOfSpeech() = Unit
 
         override fun onError(error: Int) {
+            sessionOpen = false
             if (!running) return
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
@@ -107,15 +110,21 @@ class PlatformTranscriber(
 
         override fun onResults(results: Bundle?) {
             val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-            if (text.isNotBlank()) {
-                committed = listOf(committed, text).filter { it.isNotBlank() }.joinToString(" ")
+            // A second final in the same session repeats the phrase. Partials
+            // after this final are ignored until listen() opens the next session.
+            val wasOpen = sessionOpen
+            if (wasOpen && text.isNotBlank()) {
+                val flushed = LiveTranscript(committed).onPartial(text).onEndpoint()
+                committed = flushed.committed
                 partial = ""
                 publish()
+                sessionOpen = false
             }
-            if (running) main.postDelayed({ listen() }, 200)
+            if (running && wasOpen) main.postDelayed({ listen() }, 200)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
+            if (!sessionOpen) return
             partial = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()

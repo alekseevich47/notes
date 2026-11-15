@@ -245,11 +245,18 @@ class RecordingSession @Inject constructor(
             writer.close()
             stream?.let { runCatching { it.release() } }
         }
-        return if (online != null) committed.ifBlank { _text.value } else _text.value
+        return if (online != null) LiveTranscript.prefer(committed, _text.value) else _text.value
     }
 
     private data class ToneFeed(val committed: String, val failed: Boolean)
 
+    /**
+     * [committed] stays finalized text. The current hypothesis is only the
+     * open segment and is replaced on every decode. It is appended once when
+     * the stream endpoints or when capture finishes. [_text] (and therefore
+     * the widget) shows the same join, never the partial written back into
+     * [committed].
+     */
     private fun feedTone(
         recognizer: OnlineRecognizer,
         stream: OnlineStream,
@@ -257,7 +264,8 @@ class RecordingSession @Inject constructor(
         finish: Boolean,
         committed: String,
     ): ToneFeed {
-        var next = committed
+        var next = LiveTranscript(committed = committed)
+        var published = false
         val failed = runCatching {
             if (finish) {
                 stream.inputFinished()
@@ -265,19 +273,16 @@ class RecordingSession @Inject constructor(
                 stream.acceptWaveform(floats, SAMPLE_RATE)
             }
             while (recognizer.isReady(stream)) recognizer.decode(stream)
-            val partial = recognizer.getResult(stream).text.trim()
-            if (!finish && recognizer.isEndpoint(stream)) {
-                if (partial.isNotBlank()) {
-                    next = listOf(next, partial).filter { it.isNotBlank() }.joinToString(" ")
-                }
-                recognizer.reset(stream)
-                _text.value = next
-            } else if (partial.isNotBlank() || next.isNotBlank()) {
-                next = listOf(next, partial).filter { it.isNotBlank() }.joinToString(" ")
-                if (!finish) _text.value = next
-            }
+            val partial = recognizer.getResult(stream).text
+            val endpoint = !finish && recognizer.isEndpoint(stream)
+            next = next.onPartial(partial)
+            if (endpoint || finish) next = next.onEndpoint()
+            _text.value = next.display
+            published = true
+            if (endpoint) recognizer.reset(stream)
         }.onFailure { Log.e(TAG, "T-one decode stopped", it) }.isFailure
-        return ToneFeed(next, failed)
+        val committedOut = if (failed && !published) committed else next.committed
+        return ToneFeed(committedOut, failed)
     }
 
     @SuppressLint("MissingPermission")
