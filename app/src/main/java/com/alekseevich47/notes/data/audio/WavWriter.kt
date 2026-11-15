@@ -8,12 +8,20 @@ class WavWriter(
     val file: File,
     private val sampleRate: Int = 16_000,
 ) : AutoCloseable {
-    private val raf = RandomAccessFile(file, "rw")
+    // parent mkdirs MUST run before RandomAccessFile — property inits run before init {}.
+    private val raf: RandomAccessFile = run {
+        val parent = file.parentFile
+        if (parent != null && !parent.exists()) {
+            check(parent.mkdirs() || parent.isDirectory) {
+                "Не удалось создать папку записей: ${parent.absolutePath}"
+            }
+        }
+        RandomAccessFile(file, "rw")
+    }
     private var dataBytes = 0
     private var closed = false
 
     init {
-        file.parentFile?.mkdirs()
         raf.setLength(0)
         writeHeader(0)
     }

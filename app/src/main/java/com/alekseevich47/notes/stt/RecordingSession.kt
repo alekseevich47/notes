@@ -77,21 +77,31 @@ class RecordingSession @Inject constructor(
         try {
             _phase.value = MicPhase.RECORDING
             pushWidgets()
+            val recordingsDir = File(context.filesDir, "recordings")
+            if (!recordingsDir.exists()) {
+                check(recordingsDir.mkdirs() || recordingsDir.isDirectory) {
+                    "Не удалось создать папку записей"
+                }
+            }
+            val file = File(recordingsDir, "note-${System.currentTimeMillis()}.wav")
+            // Soft beep after the target path is ready — never block mic open on STT init.
             withContext(Dispatchers.Default) { SoftBeep.play() }
-            delay(140)
-            val file = File(context.filesDir, "recordings/note-${System.currentTimeMillis()}.wav")
-            val toneDir = models.directory(ModelKind.T_ONE)
+            delay(80)
             val toneInstalled = models.isInstalled(ModelKind.T_ONE)
+            // Load T-one AFTER we are ready to capture so a slow/failing model
+            // cannot prevent WAV creation. SpeechRecognizer only if T-one absent.
             val online = if (toneInstalled) {
-                withContext(Dispatchers.Default) { SherpaEngines.onlineTone(toneDir) }
+                withContext(Dispatchers.Default) {
+                    runCatching { SherpaEngines.onlineTone(models.directory(ModelKind.T_ONE)) }
+                        .onFailure { Log.e(TAG, "T-one load crashed", it) }
+                        .getOrNull()
+                }
             } else {
                 null
             }
             if (toneInstalled && online == null) {
                 _messages.tryEmit("Модель T-one не открылась. Запись идёт без неё.")
             }
-            // A loaded T-one model owns the mic together with the WAV writer.
-            // SpeechRecognizer is a second client and is not started in that case.
             val platform = if (MicRouting.route(online != null) == LiveTranscriptRoute.PLATFORM_AFTER_RECORD) {
                 PlatformTranscriber(
                     context = context,
