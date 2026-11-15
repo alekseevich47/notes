@@ -6,18 +6,25 @@ import java.util.Locale
  * Numbered-list editing in the Cursor / ChatGPT style:
  * Enter continues the list, an empty item exits, inserts renumber, and the
  * first letter after the marker is capitalized with a single space.
+ * Backspace on an empty item ("N. " with a blank body), including one that
+ * sits between filled items, removes that line and renumbers the tail.
  */
 object ListAutoFormat {
     data class Edit(val text: String, val cursor: Int)
 
     private val numbered = Regex("""^(\d+)\.\s?(.*)$""")
+    private val emptyNumbered = Regex("""^\d+\.\s*$""")
     private val ru = Locale.forLanguageTag("ru")
 
     fun afterEdit(previous: String, current: String, cursor: Int): Edit {
         if (previous == current) return Edit(current, cursor.coerceIn(0, current.length))
-        val entered = insertedSingleNewline(previous, current, cursor)
-        val stepped = if (entered) applyEnter(current, cursor) else Edit(current, cursor)
-        return renumber(stepped.text, stepped.cursor)
+        if (insertedSingleNewline(previous, current, cursor)) {
+            val stepped = applyEnter(current, cursor)
+            return renumber(stepped.text, stepped.cursor)
+        }
+        val collapsed = collapseEmptyItem(previous, current)
+        if (collapsed != null) return renumber(collapsed.text, collapsed.cursor)
+        return renumber(current, cursor.coerceIn(0, current.length))
     }
 
     fun renumber(text: String, cursor: Int): Edit {
@@ -60,6 +67,75 @@ object ListAutoFormat {
         val updated = text.substring(0, lineStart) + replaced + text.substring(lineEndIndex)
         val nextCursor = (lineStart + replaced.length).coerceAtMost(updated.length)
         return renumber(updated, nextCursor)
+    }
+
+    /**
+     * An empty numbered line ("4." / "4. ") cannot be chipped away: renumber
+     * would put the trailing space back. Any deletion that only touches that
+     * line — backspace at its start, backspace through the marker, or deleting
+     * the marker text — drops the line so neighbours join and renumber.
+     */
+    private fun collapseEmptyItem(previous: String, current: String): Edit? {
+        if (current.length >= previous.length) return null
+        val prefix = sharedPrefix(previous, current)
+        var suffix = 0
+        while (
+            suffix < previous.length - prefix &&
+            suffix < current.length - prefix &&
+            previous[previous.length - 1 - suffix] == current[current.length - 1 - suffix]
+        ) {
+            suffix++
+        }
+        val oldStart = prefix
+        val oldEnd = previous.length - suffix
+        if (oldEnd <= oldStart) return null
+        if (current.substring(prefix, current.length - suffix).isNotEmpty()) return null
+
+        val spans = lineSpans(previous)
+        val target = spans.firstOrNull { span ->
+            emptyNumbered.matches(span.text) && targetsEmptyLine(span, oldStart, oldEnd, previous.length)
+        } ?: return null
+        val lines = previous.split('\n')
+        val kept = lines.filterIndexed { index, _ -> index != target.index }
+        val newText = kept.joinToString("\n")
+        val newCursor = if (target.index == 0) {
+            0
+        } else {
+            var position = 0
+            for (index in 0 until target.index - 1) position += lines[index].length + 1
+            position + lines[target.index - 1].length
+        }
+        return Edit(newText, newCursor.coerceIn(0, newText.length))
+    }
+
+    private fun targetsEmptyLine(span: LineSpan, oldStart: Int, oldEnd: Int, length: Int): Boolean {
+        val minStart = if (span.start > 0) span.start - 1 else span.start
+        val maxEnd = if (span.end < length) span.end + 1 else span.end
+        if (oldStart < minStart || oldEnd > maxEnd) return false
+        val overlapsLine = oldStart < span.end && oldEnd > span.start
+        val precedingNewline = span.start > 0 && oldStart == span.start - 1 && oldEnd == span.start
+        return overlapsLine || precedingNewline
+    }
+
+    private data class LineSpan(val index: Int, val start: Int, val end: Int, val text: String)
+
+    private fun lineSpans(text: String): List<LineSpan> {
+        val lines = text.split('\n')
+        val spans = ArrayList<LineSpan>(lines.size)
+        var offset = 0
+        for (index in lines.indices) {
+            val line = lines[index]
+            spans += LineSpan(index, offset, offset + line.length, line)
+            offset += line.length + 1
+        }
+        return spans
+    }
+
+    private fun sharedPrefix(left: String, right: String): Int {
+        val limit = minOf(left.length, right.length)
+        var index = 0
+        while (index < limit && left[index] == right[index]) index++
+        return index
     }
 
     private fun insertedSingleNewline(previous: String, current: String, cursor: Int): Boolean {

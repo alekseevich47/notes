@@ -110,4 +110,86 @@ class ListAutoFormatTest {
         val off = ListAutoFormat.toggleLine(on.text, cursor = on.text.length)
         assertEquals("Пункт", off.text)
     }
+
+    @Test
+    fun backspaceAtStartOfMiddleEmptyItemRemovesItAndRenumbers() {
+        val previous = "1. А\n2. \n3. Б"
+        val current = "1. А2. \n3. Б"
+        val edit = ListAutoFormat.afterEdit(previous, current, cursor = "1. А".length)
+        assertEquals("1. А\n2. Б", edit.text)
+        assertEquals("1. А".length, edit.cursor)
+    }
+
+    @Test
+    fun backspaceOnEmptyMarkerBetweenItemsRemovesTheLine() {
+        val previous = "1. А\n2. \n3. Б"
+        val current = "1. А\n2.\n3. Б"
+        val edit = ListAutoFormat.afterEdit(previous, current, cursor = "1. А\n2.".length)
+        assertEquals("1. А\n2. Б", edit.text)
+        assertEquals("1. А".length, edit.cursor)
+    }
+
+    @Test
+    fun deletingEmptyMarkerTextDoesNotLeaveAGap() {
+        val previous = "1. А\n2. \n3. Б"
+        val current = "1. А\n\n3. Б"
+        val edit = ListAutoFormat.afterEdit(previous, current, cursor = "1. А\n".length)
+        assertEquals("1. А\n2. Б", edit.text)
+        assertEquals("1. А".length, edit.cursor)
+    }
+
+    @Test
+    fun deletingTheWholeEmptyLineRenumbersTheTail() {
+        val previous = "1. Под\n2. Иош\n3. Рлщщ\n4. \n5. Ррг"
+        val current = "1. Под\n2. Иош\n3. Рлщщ\n5. Ррг"
+        val edit = ListAutoFormat.afterEdit(previous, current, cursor = "1. Под\n2. Иош\n3. Рлщщ\n".length)
+        assertEquals("1. Под\n2. Иош\n3. Рлщщ\n4. Ррг", edit.text)
+    }
+
+    @Test
+    fun backspaceOnScreenshotEmptyFourthItemJoinsTheTail() {
+        val previous = "1. Под\n2. Иош\n3. Рлщщ\n4. \n5. Ррг"
+        val current = "1. Под\n2. Иош\n3. Рлщщ\n4.\n5. Ррг"
+        val edit = ListAutoFormat.afterEdit(previous, current, cursor = "1. Под\n2. Иош\n3. Рлщщ\n4.".length)
+        assertEquals("1. Под\n2. Иош\n3. Рлщщ\n4. Ррг", edit.text)
+    }
+
+    @Test
+    fun backspaceOnTrailingEmptyItemRemovesJustThatLine() {
+        val edit = ListAutoFormat.afterEdit("1. А\n2. ", "1. А\n2.", cursor = "1. А\n2.".length)
+        assertEquals("1. А", edit.text)
+        assertEquals("1. А".length, edit.cursor)
+    }
+
+    @Test
+    fun backspaceAtStartOfTrailingEmptyItemRemovesIt() {
+        val edit = ListAutoFormat.afterEdit("1. А\n2. ", "1. А2. ", cursor = "1. А".length)
+        assertEquals("1. А", edit.text)
+        assertEquals("1. А".length, edit.cursor)
+    }
+
+    @Test
+    fun backspaceOnALoneEmptyItemClearsTheMarker() {
+        val edit = ListAutoFormat.afterEdit("1. ", "1.", cursor = 2)
+        assertEquals("", edit.text)
+        assertEquals(0, edit.cursor)
+    }
+
+    @Test
+    fun deletingFirstEmptyItemPromotesTheTail() {
+        val edit = ListAutoFormat.afterEdit("1. \n2. Б", "1.\n2. Б", cursor = 2)
+        assertEquals("1. Б", edit.text)
+    }
+
+    @Test
+    fun backspaceInsideAFilledItemDoesNotDropTheLine() {
+        val edit = ListAutoFormat.afterEdit("1. А\n2. Б\n3. В", "1. А\n2. \n3. В", cursor = "1. А\n2. ".length)
+        assertEquals("1. А\n2. \n3. В", edit.text)
+    }
+
+    @Test
+    fun backspaceAtStartOfFilledItemDoesNotDropIt() {
+        val edit = ListAutoFormat.afterEdit("1. А\n2. Б", "1. А2. Б", cursor = "1. А".length)
+        assertEquals("1. А2. Б", edit.text)
+    }
 }

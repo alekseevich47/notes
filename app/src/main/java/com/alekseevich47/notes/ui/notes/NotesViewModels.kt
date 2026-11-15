@@ -128,6 +128,22 @@ class EditorViewModel @Inject constructor(
         return PinResult.WRONG
     }
 
+    /**
+     * Create-PIN step used when hidden text is opened before a PIN exists.
+     * Both entries are checked; a service-reset code clears storage and unlocks.
+     */
+    fun saveCreatedPin(first: String, second: String): PinSetup {
+        if (PinHasher.isServiceReset(first) || PinHasher.isServiceReset(second)) {
+            settings.setPinHash(null)
+            _unlocked.value = true
+            return PinSetup.RESET
+        }
+        if (first.length != 4 || first != second) return PinSetup.MISMATCH
+        settings.setPinHash(PinHasher.hash(first))
+        _unlocked.value = true
+        return PinSetup.SAVED
+    }
+
     fun hasPin(): Boolean = settings.hasPin
 
     private fun scheduleSave() {
@@ -183,4 +199,6 @@ class EditorViewModel @Inject constructor(
     }
 
     enum class PinResult { OK, WRONG, RESET, MISSING }
+
+    enum class PinSetup { SAVED, MISMATCH, RESET }
 }

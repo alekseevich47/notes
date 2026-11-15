@@ -16,19 +16,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.FormatBold
-import androidx.compose.material.icons.outlined.FormatItalic
-import androidx.compose.material.icons.outlined.FormatListNumbered
-import androidx.compose.material.icons.outlined.FormatStrikethrough
-import androidx.compose.material.icons.outlined.FormatUnderlined
-import androidx.compose.material.icons.outlined.TableChart
-import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,12 +29,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -69,15 +72,9 @@ import kotlin.math.min
 private const val TABLE_MAX_ROWS = 8
 private const val TABLE_MAX_COLS = 6
 
-private val CensorInk = Color(0xFF6A6478)
-private val CensorTiles = arrayOf(
-    Color(0xFF5C5668),
-    Color(0xFF7D768A),
-    Color(0xFF3E3948),
-    Color(0xFF948DA3),
-    Color(0xFF6A6478),
-    Color(0xFF4C4658),
-)
+private val FrostPlateLight = Color(0xFFE6E0F2)
+private val FrostPlateDark = Color(0xFF3C3850)
+private val numberedLine = Regex("""^\d+\.\s?.*""")
 
 @Composable
 fun RichNoteEditor(
@@ -87,144 +84,293 @@ fun RichNoteEditor(
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
     onAskTable: () -> Unit,
+    focusRequester: FocusRequester,
+    formats: NoteEditorController,
+    pinDialogVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     var field by remember {
         mutableStateOf(TextFieldValue(document.text, TextRange(document.text.length)))
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var menuOverflow by remember { mutableStateOf(false) }
+    val prompt = remember { HiddenPromptGuard() }
+    val clipboard = LocalClipboardManager.current
+    val platformToolbar = LocalTextToolbar.current
+    val toolbar = remember { RoutingTextToolbar(platformToolbar) }
+    val background = MaterialTheme.colorScheme.background
+    val dark = (0.2126f * background.red + 0.7152f * background.green + 0.0722f * background.blue) < 0.4f
     val censorLayout = layout
     val censor = !hiddenUnlocked && document.marks.any { it.style == MarkStyle.HIDDEN }
-    Column(modifier) {
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        ) {
-            Tool(Icons.Outlined.FormatBold, "Жирный") {
-                applyStyle(document, field, MarkStyle.BOLD, onDocument, onNeedSelection)
-            }
-            Tool(Icons.Outlined.FormatItalic, "Курсив") {
-                applyStyle(document, field, MarkStyle.ITALIC, onDocument, onNeedSelection)
-            }
-            Tool(Icons.Outlined.FormatStrikethrough, "Зачёркнутый") {
-                applyStyle(document, field, MarkStyle.STRIKE, onDocument, onNeedSelection)
-            }
-            Tool(Icons.Outlined.FormatUnderlined, "Подчёркнутый") {
-                applyStyle(document, field, MarkStyle.UNDERLINE, onDocument, onNeedSelection)
-            }
-            Tool(Icons.Outlined.VisibilityOff, "Скрытый") {
-                applyStyle(document, field, MarkStyle.HIDDEN, onDocument, onNeedSelection)
-            }
-            Tool(Icons.Outlined.FormatListNumbered, "Список") {
-                val previous = field.text
-                val edit = ListAutoFormat.toggleLine(previous, field.selection.min)
-                field = TextFieldValue(edit.text, TextRange(edit.cursor))
-                onDocument(
-                    document.copy(
-                        text = edit.text,
-                        marks = MarkEdits.shift(document.marks, previous, edit.text),
-                    ),
-                )
-            }
-            Tool(Icons.Outlined.TableChart, "Таблица", onAskTable)
-        }
-        if (censor) {
-            Text(
-                "Скрытый фрагмент под цензурой. Нажмите его и введите PIN.",
-                modifier = Modifier
-                    .padding(vertical = 6.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable(onClick = onRequestUnlock)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .fillMaxWidth(),
-                color = NotesPurple,
-                fontFamily = NotesFont,
-            )
-        }
-        BasicTextField(
-            value = field,
-            onValueChange = { next ->
-                val previous = field.text
-                val textHitsHidden = HiddenText.editTouches(document.marks, previous, next.text)
-                val cursorInHidden = HiddenText.cursorInside(
-                    document.marks,
-                    next.selection.start,
-                    next.selection.end,
-                )
-                if (!hiddenUnlocked && (textHitsHidden || cursorInHidden)) onRequestUnlock()
-                if (!hiddenUnlocked && textHitsHidden) return@BasicTextField
-                val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end)
-                val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
-                field = next.copy(text = edit.text, selection = selection)
-                onDocument(
-                    document.copy(
-                        text = edit.text,
-                        marks = MarkEdits.shift(document.marks, previous, edit.text),
-                    ),
-                )
-            },
-            onTextLayout = { result ->
-                val previous = layout
-                if (
-                    previous == null ||
-                    previous.size != result.size ||
-                    previous.layoutInput.text.text != result.layoutInput.text.text
-                ) {
-                    layout = result
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp)
-                .drawWithContent {
-                    drawContent()
-                    if (censor && censorLayout != null) {
-                        drawCensorMosaic(censorLayout, document.marks)
-                    }
-                },
-            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-                fontFamily = NotesFont,
+    if (field.selection.collapsed && menuOverflow) menuOverflow = false
+    if (pinDialogVisible) {
+        prompt.dialogOpen = true
+    } else if (prompt.dialogOpen) {
+        prompt.dialogOpen = false
+        prompt.armed = false
+    }
+
+    fun requestUnlock() {
+        prompt.dialogOpen = true
+        prompt.armed = false
+        onRequestUnlock()
+    }
+
+    fun publish(previous: String, edit: ListAutoFormat.Edit) {
+        field = TextFieldValue(edit.text, TextRange(edit.cursor.coerceIn(0, edit.text.length)))
+        onDocument(
+            document.copy(
+                text = edit.text,
+                marks = MarkEdits.shift(document.marks, previous, edit.text),
             ),
-            cursorBrush = SolidColor(NotesPurple),
-            visualTransformation = remember(document.marks, hiddenUnlocked) {
-                NoteVisual(document.marks, hiddenUnlocked)
-            },
         )
     }
+
+    fun applyMark(style: MarkStyle) {
+        val start = field.selection.min
+        val end = field.selection.max
+        if (start == end) {
+            onNeedSelection()
+            return
+        }
+        onDocument(document.copy(marks = MarkEdits.toggle(document.marks, style, start, end)))
+    }
+
+    fun toggleList() {
+        val previous = field.text
+        publish(previous, ListAutoFormat.toggleLine(previous, field.selection.min))
+    }
+
+    fun overlapsLockedHidden(): Boolean {
+        if (hiddenUnlocked) return false
+        return HiddenText.cursorInside(document.marks, field.selection.start, field.selection.end)
+    }
+
+    fun copySelection() {
+        val start = field.selection.min
+        val end = field.selection.max
+        if (start == end || end > field.text.length) return
+        if (overlapsLockedHidden()) {
+            requestUnlock()
+            return
+        }
+        clipboard.setText(AnnotatedString(field.text.substring(start, end)))
+    }
+
+    fun cutSelection() {
+        val start = field.selection.min
+        val end = field.selection.max
+        if (start == end || end > field.text.length) return
+        if (overlapsLockedHidden()) {
+            requestUnlock()
+            return
+        }
+        val previous = field.text
+        clipboard.setText(AnnotatedString(previous.substring(start, end)))
+        val proposed = previous.removeRange(start, end)
+        publish(previous, ListAutoFormat.afterEdit(previous, proposed, start))
+    }
+
+    fun selectAll() {
+        field = field.copy(selection = TextRange(0, field.text.length))
+    }
+
+    SideEffect {
+        formats.bold = { applyMark(MarkStyle.BOLD) }
+        formats.italic = { applyMark(MarkStyle.ITALIC) }
+        formats.underline = { applyMark(MarkStyle.UNDERLINE) }
+        formats.strike = { applyMark(MarkStyle.STRIKE) }
+        formats.hidden = { applyMark(MarkStyle.HIDDEN) }
+        formats.list = { toggleList() }
+        formats.table = onAskTable
+        formats.activeStyles = stylesTouching(document.marks, field.selection)
+        formats.listActive = lineNumbered(field.text, field.selection.min)
+    }
+
+    Column(modifier.fillMaxWidth()) {
+        if (censor) {
+            Text(
+                "Открыть скрытый текст",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = { requestUnlock() })
+                    .padding(bottom = 6.dp),
+                color = NotesPurple,
+                fontFamily = NotesFont,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Box(Modifier.fillMaxWidth()) {
+            CompositionLocalProvider(LocalTextToolbar provides toolbar) {
+                BasicTextField(
+                    value = field,
+                    onValueChange = { next ->
+                        val previous = field.text
+                        val textHitsHidden = HiddenText.editTouches(document.marks, previous, next.text)
+                        val cursorInHidden = HiddenText.cursorInside(
+                            document.marks,
+                            next.selection.start,
+                            next.selection.end,
+                        )
+                        if (!hiddenUnlocked && textHitsHidden) {
+                            requestUnlock()
+                            return@BasicTextField
+                        }
+                        if (!cursorInHidden && !prompt.dialogOpen) prompt.armed = true
+                        if (!hiddenUnlocked && cursorInHidden && prompt.armed && !prompt.dialogOpen) {
+                            requestUnlock()
+                        }
+                        val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end)
+                        val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
+                        field = next.copy(text = edit.text, selection = selection)
+                        onDocument(
+                            document.copy(
+                                text = edit.text,
+                                marks = MarkEdits.shift(document.marks, previous, edit.text),
+                            ),
+                        )
+                    },
+                    onTextLayout = { result ->
+                        val previous = layout
+                        if (
+                            previous == null ||
+                            previous.size != result.size ||
+                            previous.layoutInput.text.text != result.layoutInput.text.text
+                        ) {
+                            layout = result
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { formats.bodyFocused = it.isFocused }
+                        .drawWithContent {
+                            drawContent()
+                            if (censor && censorLayout != null) {
+                                drawHiddenFrost(censorLayout, document.marks, dark)
+                            }
+                        },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontFamily = NotesFont,
+                    ),
+                    cursorBrush = SolidColor(NotesPurple),
+                    visualTransformation = remember(document.marks, hiddenUnlocked, dark) {
+                        NoteVisual(document.marks, hiddenUnlocked, dark)
+                    },
+                    decorationBox = { inner ->
+                        Box(Modifier.fillMaxWidth()) {
+                            if (field.text.isEmpty()) {
+                                Text(
+                                    "Начните писать…",
+                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                                        fontFamily = NotesFont,
+                                    ),
+                                )
+                            }
+                            inner()
+                        }
+                    },
+                )
+            }
+            val shown = layout?.takeIf {
+                !field.selection.collapsed && it.layoutInput.text.isNotEmpty()
+            }
+            if (shown != null) {
+                val length = shown.layoutInput.text.length
+                val start = field.selection.min.coerceIn(0, length)
+                val end = field.selection.max.coerceIn(0, length)
+                if (start != end) {
+                    SelectionActionsPopup(
+                        startHandle = shown.getCursorRect(start),
+                        endHandle = shown.getCursorRect(end),
+                        overflow = menuOverflow,
+                        onCut = { cutSelection() },
+                        onCopy = { copySelection() },
+                        onMore = { menuOverflow = true },
+                        onBack = { menuOverflow = false },
+                        onHidden = { applyMark(MarkStyle.HIDDEN) },
+                        onSelectAll = { selectAll() },
+                        onBold = { applyMark(MarkStyle.BOLD) },
+                        onItalic = { applyMark(MarkStyle.ITALIC) },
+                        onStrike = { applyMark(MarkStyle.STRIKE) },
+                        onUnderline = { applyMark(MarkStyle.UNDERLINE) },
+                    )
+                }
+            }
+        }
+    }
 }
 
-private fun applyStyle(
-    document: NoteDocument,
-    field: TextFieldValue,
-    style: MarkStyle,
-    onDocument: (NoteDocument) -> Unit,
-    onNeedSelection: () -> Unit,
-) {
-    val start = field.selection.min
-    val end = field.selection.max
-    if (start == end) {
-        onNeedSelection()
-        return
-    }
-    onDocument(document.copy(marks = MarkEdits.toggle(document.marks, style, start, end)))
-}
-
-@Composable
-private fun Tool(icon: ImageVector, label: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
-        Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onSurface)
-    }
+private class HiddenPromptGuard {
+    var dialogOpen: Boolean = false
+    var armed: Boolean = true
 }
 
 /**
- * Locked hidden text keeps its length (cursor mapping stays 1:1) but is painted
- * the same colour as the censor bar, so glyphs never show. A canvas mosaic is
- * drawn on top — no AGSL and no RenderEffect, which break on Tecno.
+ * Selection uses the in-app bubble, so the platform toolbar is hidden while
+ * text is selected. A collapsed cursor still gets the platform menu (paste).
  */
+private class RoutingTextToolbar(
+    private val platform: TextToolbar,
+) : TextToolbar {
+    private var selectionMenu = false
+
+    override val status: TextToolbarStatus
+        get() = if (selectionMenu) TextToolbarStatus.Shown else platform.status
+
+    override fun hide() {
+        selectionMenu = false
+        platform.hide()
+    }
+
+    override fun showMenu(
+        rect: Rect,
+        onCopyRequested: (() -> Unit)?,
+        onPasteRequested: (() -> Unit)?,
+        onCutRequested: (() -> Unit)?,
+        onSelectAllRequested: (() -> Unit)?,
+    ) {
+        val selected = onCopyRequested != null || onCutRequested != null
+        if (selected) {
+            selectionMenu = true
+            platform.hide()
+        } else {
+            selectionMenu = false
+            platform.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested)
+        }
+    }
+}
+
+private fun stylesTouching(marks: List<TextMark>, selection: TextRange): Set<MarkStyle> {
+    val start = selection.min
+    val end = selection.max
+    return marks.mapNotNull { mark ->
+        if (mark.end <= mark.start) return@mapNotNull null
+        val hits = if (start == end) {
+            start in mark.start until mark.end
+        } else {
+            mark.start < end && mark.end > start
+        }
+        if (hits) mark.style else null
+    }.toSet()
+}
+
+private fun lineNumbered(text: String, cursor: Int): Boolean {
+    if (text.isEmpty()) return false
+    val safe = cursor.coerceIn(0, text.length)
+    val lineStart = text.lastIndexOf('\n', (safe - 1).coerceAtLeast(0)).let { index ->
+        if (index < 0) 0 else index + 1
+    }
+    val lineEnd = text.indexOf('\n', safe).let { index -> if (index < 0) text.length else index }
+    return numberedLine.matches(text.substring(lineStart, lineEnd))
+}
+
 private class NoteVisual(
     private val marks: List<TextMark>,
     private val unlocked: Boolean,
+    private val dark: Boolean,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val styled = buildAnnotatedString {
@@ -233,14 +379,14 @@ private class NoteVisual(
                 val start = mark.start.coerceIn(0, length)
                 val end = mark.end.coerceIn(0, length)
                 if (end <= start) return@forEach
-                addStyle(styleFor(mark.style, unlocked), start, end)
+                addStyle(styleFor(mark.style, unlocked, dark), start, end)
             }
         }
         return TransformedText(styled, OffsetMapping.Identity)
     }
 }
 
-private fun styleFor(style: MarkStyle, unlocked: Boolean): SpanStyle = when (style) {
+private fun styleFor(style: MarkStyle, unlocked: Boolean, dark: Boolean): SpanStyle = when (style) {
     MarkStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
     MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
     MarkStyle.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
@@ -248,15 +394,24 @@ private fun styleFor(style: MarkStyle, unlocked: Boolean): SpanStyle = when (sty
     MarkStyle.HIDDEN -> if (unlocked) {
         SpanStyle(background = NotesPurple.copy(alpha = 0.18f), textDecoration = TextDecoration.Underline)
     } else {
-        SpanStyle(color = CensorInk, background = CensorInk)
+        val plate = if (dark) FrostPlateDark else FrostPlateLight
+        SpanStyle(color = plate, background = plate)
     }
 }
 
-private fun DrawScope.drawCensorMosaic(layout: TextLayoutResult, marks: List<TextMark>) {
+/**
+ * Locked hidden text is painted the same colour as the plate (glyphs never show)
+ * and covered with layered soft streaks. No AGSL and no RenderEffect — those break
+ * compositing on Tecno.
+ */
+private fun DrawScope.drawHiddenFrost(layout: TextLayoutResult, marks: List<TextMark>, dark: Boolean) {
     val textLength = layout.layoutInput.text.length
     if (textLength == 0) return
-    val tile = 4.dp.toPx()
-    val pad = 1.dp.toPx()
+    val radius = 6.dp.toPx()
+    val padX = 1.5.dp.toPx()
+    val padY = 1.dp.toPx()
+    val tile = 3.dp.toPx()
+    val streak = 2.5.dp.toPx()
     marks.filter { it.style == MarkStyle.HIDDEN }.forEach { mark ->
         val start = mark.start.coerceIn(0, textLength)
         val end = mark.end.coerceIn(0, textLength)
@@ -270,38 +425,112 @@ private fun DrawScope.drawCensorMosaic(layout: TextLayoutResult, marks: List<Tex
             if (to <= from) continue
             val left = layout.getHorizontalPosition(from, true)
             val right = layout.getHorizontalPosition(to, true)
-            val barLeft = min(left, right) - pad
-            val barRight = max(left, right) + pad
+            val barLeft = min(left, right) - padX
+            val barRight = max(left, right) + padX
             if (barRight - barLeft < 1f) continue
-            val top = layout.getLineTop(line)
-            val bottom = layout.getLineBottom(line)
+            val top = layout.getLineTop(line) - padY
+            val bottom = layout.getLineBottom(line) + padY
             if (bottom - top < 1f) continue
-            var y = top
-            var row = 0
-            while (y < bottom - 0.4f) {
-                val height = min(tile, bottom - y)
-                var x = barLeft
-                var column = 0
-                while (x < barRight - 0.4f) {
-                    val width = min(tile, barRight - x)
+            val path = Path().apply {
+                addRoundRect(
+                    RoundRect(
+                        left = barLeft,
+                        top = top,
+                        right = barRight,
+                        bottom = bottom,
+                        cornerRadius = CornerRadius(radius, radius),
+                    ),
+                )
+            }
+            clipPath(path) {
+                drawRect(
+                    color = if (dark) FrostPlateDark else FrostPlateLight,
+                    topLeft = Offset(barLeft, top),
+                    size = Size(barRight - barLeft, bottom - top),
+                )
+                var y = top
+                var row = 0
+                while (y < bottom - 0.4f) {
+                    val height = min(streak, bottom - y)
                     drawRect(
-                        color = censorTileColor(row, column, line),
-                        topLeft = Offset(x, y),
-                        size = Size(width, height),
+                        color = frostStreak(row, line, dark),
+                        topLeft = Offset(barLeft, y),
+                        size = Size(barRight - barLeft, height),
                     )
-                    x += tile
-                    column++
+                    y += streak
+                    row++
                 }
-                y += tile
-                row++
+                y = top
+                row = 0
+                while (y < bottom - 0.4f) {
+                    val height = min(tile, bottom - y)
+                    var x = barLeft
+                    var column = 0
+                    while (x < barRight - 0.4f) {
+                        val width = min(tile, barRight - x)
+                        drawRect(
+                            color = frostSpeck(row, column, line, dark),
+                            topLeft = Offset(x, y),
+                            size = Size(width, height),
+                        )
+                        x += tile
+                        column++
+                    }
+                    y += tile
+                    row++
+                }
+                val band = bottom - top
+                drawRect(
+                    color = Color.White.copy(alpha = if (dark) 0.10f else 0.34f),
+                    topLeft = Offset(barLeft, top),
+                    size = Size(barRight - barLeft, band * 0.42f),
+                )
+                drawRect(
+                    color = (if (dark) Color(0xFF120E1C) else Color(0xFF6A6280)).copy(alpha = if (dark) 0.16f else 0.07f),
+                    topLeft = Offset(barLeft, top + band * 0.58f),
+                    size = Size(barRight - barLeft, band * 0.42f),
+                )
             }
         }
     }
 }
 
-private fun censorTileColor(row: Int, column: Int, line: Int): Color {
-    val mixed = (row * 17 + column * 11 + line * 5 + (row xor column)) and 0x7fffffff
-    return CensorTiles[mixed % CensorTiles.size]
+private fun frostStreak(row: Int, line: Int, dark: Boolean): Color {
+    val light = arrayOf(
+        Color(0x88F7F4FC),
+        Color(0x66D5CEE6),
+        Color(0x55F1ECF8),
+        Color(0x77C8C0D8),
+    )
+    val night = arrayOf(
+        Color(0x88524C68),
+        Color(0x66342F44),
+        Color(0x775A5470),
+        Color(0x552C2838),
+    )
+    val palette = if (dark) night else light
+    val mixed = (row * 3 + line * 5) and 0x7fffffff
+    return palette[mixed % palette.size]
+}
+
+private fun frostSpeck(row: Int, column: Int, line: Int, dark: Boolean): Color {
+    val light = arrayOf(
+        Color(0x55FFFFFF),
+        Color(0x38C8C0D6),
+        Color(0x22F8F5FC),
+        Color(0x40B5ADC6),
+        Color(0x30FFFFFF),
+    )
+    val night = arrayOf(
+        Color(0x44706888),
+        Color(0x33241F34),
+        Color(0x285E5874),
+        Color(0x447C7592),
+        Color(0x22161022),
+    )
+    val palette = if (dark) night else light
+    val mixed = (row * 13 + column * 7 + line * 3 + (row xor column)) and 0x7fffffff
+    return palette[mixed % palette.size]
 }
 
 @Composable
