@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.widget.RemoteViews
+import androidx.core.content.ContextCompat
 import com.alekseevich47.notes.MainActivity
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
@@ -17,30 +18,56 @@ object WidgetUpdater {
     @Volatile var level: Float = 0f
     @Volatile var transcript: String = ""
     @Volatile var frame: Int = 0
+    @Volatile var fadeFrame: Int = WidgetMotion.FRAME_COUNT - 1
+
+    private val gate = Any()
+    private val dotFrames = intArrayOf(
+        R.drawable.ic_widget_dots_0,
+        R.drawable.ic_widget_dots_1,
+        R.drawable.ic_widget_dots_2,
+        R.drawable.ic_widget_dots_3,
+        R.drawable.ic_widget_dots_4,
+        R.drawable.ic_widget_dots_5,
+    )
 
     fun push(context: Context, phase: MicPhase, level: Float, transcript: String) {
-        this.phase = phase
-        this.level = level
-        this.transcript = transcript
-        render(context)
+        synchronized(gate) {
+            val previous = rollingLines(this.transcript)
+            val next = rollingLines(transcript)
+            this.phase = phase
+            this.level = level
+            this.transcript = transcript
+            frame = (frame + 1) % WidgetMotion.FRAME_COUNT
+            fadeFrame = if (WidgetMotion.shouldResetFade(previous, next)) {
+                0
+            } else {
+                (fadeFrame + 1).coerceAtMost(WidgetMotion.FRAME_COUNT - 1)
+            }
+            render(context)
+        }
     }
 
     fun refresh(context: Context) = render(context.applicationContext)
 
     fun bumpFrame(context: Context) {
-        frame = (frame + 1) % 3
-        render(context)
+        synchronized(gate) {
+            frame = (frame + 1) % WidgetMotion.FRAME_COUNT
+            if (fadeFrame < WidgetMotion.FRAME_COUNT - 1) fadeFrame += 1
+            render(context)
+        }
     }
 
     private fun render(context: Context) {
-        val manager = AppWidgetManager.getInstance(context)
-        val small = ComponentName(context, NotesWidgetSmall::class.java)
-        val wide = ComponentName(context, NotesWidgetWide::class.java)
-        manager.getAppWidgetIds(small).forEach { id ->
-            manager.updateAppWidget(id, smallViews(context))
-        }
-        manager.getAppWidgetIds(wide).forEach { id ->
-            manager.updateAppWidget(id, wideViews(context))
+        synchronized(gate) {
+            val manager = AppWidgetManager.getInstance(context)
+            val small = ComponentName(context, NotesWidgetSmall::class.java)
+            val wide = ComponentName(context, NotesWidgetWide::class.java)
+            manager.getAppWidgetIds(small).forEach { id ->
+                manager.updateAppWidget(id, smallViews(context))
+            }
+            manager.getAppWidgetIds(wide).forEach { id ->
+                manager.updateAppWidget(id, wideViews(context))
+            }
         }
     }
 
@@ -57,11 +84,17 @@ object WidgetUpdater {
         applyMic(views, phase, level, frame)
         val lines = rollingLines(transcript)
         val ids = intArrayOf(R.id.line0, R.id.line1, R.id.line2, R.id.line3)
-        val alphas = floatArrayOf(0.32f, 0.52f, 0.74f, 1f)
+        val base = ContextCompat.getColor(context, R.color.widget_text)
         ids.forEachIndexed { index, viewId ->
             val value = lines.getOrNull(index).orEmpty()
             views.setTextViewText(viewId, value)
-            views.setFloat(viewId, "setAlpha", if (value.isBlank()) 0f else alphas[index])
+            val alpha = if (value.isBlank()) {
+                0f
+            } else {
+                WidgetMotion.transcriptAlpha(index, ids.size, fadeFrame)
+            }
+            views.setTextColor(viewId, WidgetMotion.colorWithAlpha(base, alpha))
+            views.setFloat(viewId, "setAlpha", 1f)
         }
         views.setOnClickPendingIntent(R.id.widget_mic, micIntent(context))
         views.setOnClickPendingIntent(R.id.widget_transcript, openAppIntent(context))
@@ -70,27 +103,32 @@ object WidgetUpdater {
     }
 
     private fun applyMic(views: RemoteViews, phase: MicPhase, level: Float, frame: Int) {
-        val recording = phase == MicPhase.RECORDING
+        val hot = phase == MicPhase.RECORDING || phase == MicPhase.PROCESSING
         views.setInt(
             R.id.widget_mic,
             "setBackgroundResource",
-            if (recording) R.drawable.widget_mic_plate_rec else R.drawable.widget_mic_plate,
+            if (hot) R.drawable.widget_mic_plate_rec else R.drawable.widget_mic_plate,
         )
         val icon = when (phase) {
-            MicPhase.RECORDING -> if (level > 0.45f) R.drawable.ic_widget_mic_rec else R.drawable.ic_widget_mic_rec
-            MicPhase.PROCESSING -> R.drawable.ic_widget_dots
+            MicPhase.RECORDING -> R.drawable.ic_widget_mic_rec
+            MicPhase.PROCESSING -> dotFrames[WidgetMotion.dotFrame(frame)]
             MicPhase.DONE -> R.drawable.ic_widget_done
             MicPhase.IDLE -> R.drawable.ic_widget_mic
         }
         views.setImageViewResource(R.id.widget_mic_icon, icon)
-        if (phase == MicPhase.PROCESSING) {
-            val scale = 0.82f + (frame * 0.08f)
-            views.setFloat(R.id.widget_mic_icon, "setScaleX", scale)
-            views.setFloat(R.id.widget_mic_icon, "setScaleY", scale)
-        } else {
-            views.setFloat(R.id.widget_mic_icon, "setScaleX", 1f)
-            views.setFloat(R.id.widget_mic_icon, "setScaleY", 1f)
+        val scale = when (phase) {
+            MicPhase.RECORDING -> WidgetMotion.recordingScale(frame, level)
+            MicPhase.PROCESSING -> WidgetMotion.processingScale(frame)
+            MicPhase.DONE -> WidgetMotion.doneScale(frame)
+            MicPhase.IDLE -> 1f
         }
+        val alpha = when (phase) {
+            MicPhase.RECORDING -> WidgetMotion.recordingAlpha(frame, level)
+            else -> 1f
+        }
+        views.setFloat(R.id.widget_mic_icon, "setScaleX", scale)
+        views.setFloat(R.id.widget_mic_icon, "setScaleY", scale)
+        views.setFloat(R.id.widget_mic_icon, "setAlpha", alpha)
     }
 
     fun rollingLines(text: String, maxLines: Int = 4, width: Int = 36): List<String> {

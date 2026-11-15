@@ -15,6 +15,8 @@ import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.ui.widgets.WidgetUpdater
+import com.k2fsa.sherpa.onnx.OnlineRecognizer
+import com.k2fsa.sherpa.onnx.OnlineStream
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -79,12 +81,18 @@ class RecordingSession @Inject constructor(
             delay(140)
             val file = File(context.filesDir, "recordings/note-${System.currentTimeMillis()}.wav")
             val toneDir = models.directory(ModelKind.T_ONE)
-            val online = if (models.isInstalled(ModelKind.T_ONE)) {
+            val toneInstalled = models.isInstalled(ModelKind.T_ONE)
+            val online = if (toneInstalled) {
                 withContext(Dispatchers.Default) { SherpaEngines.onlineTone(toneDir) }
             } else {
                 null
             }
-            val platform = if (online == null) {
+            if (toneInstalled && online == null) {
+                _messages.tryEmit("Модель T-one не открылась. Запись идёт без неё.")
+            }
+            // A loaded T-one model owns the mic together with the WAV writer.
+            // SpeechRecognizer is a second client and is not started in that case.
+            val platform = if (MicRouting.route(online != null) == LiveTranscriptRoute.PLATFORM_AFTER_RECORD) {
                 PlatformTranscriber(
                     context = context,
                     onText = { value ->
@@ -96,12 +104,11 @@ class RecordingSession @Inject constructor(
             } else {
                 null
             }
-            platform?.start()
             val captured = try {
-                withContext(Dispatchers.IO) { capture(file, online) }
+                withContext(Dispatchers.IO) { capture(file, online, platform) }
             } finally {
                 withContext(Dispatchers.Main) { platform?.stop() }
-                online?.release()
+                runCatching { online?.release() }
             }
             _phase.value = MicPhase.PROCESSING
             _level.value = 0f
@@ -132,86 +139,197 @@ class RecordingSession @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    private fun capture(file: File, online: com.k2fsa.sherpa.onnx.OnlineRecognizer?): String {
-        val min = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        if (min <= 0) error("Микрофон недоступен")
-        val bufferSize = max(min, SAMPLE_RATE / 5 * 2)
-        val recorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize,
-        )
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            recorder.release()
-            error("Не удалось открыть микрофон")
-        }
+    private fun capture(file: File, online: OnlineRecognizer?, platform: PlatformTranscriber?): String {
+        var mic = openMic()
         val writer = WavWriter(file)
-        val stream = online?.createStream()
-        val buffer = ByteArray(bufferSize)
+        var buffer = ByteArray(mic.bufferSize)
+        var tone = online
+        var stream = tone?.let { recognizer ->
+            runCatching { recognizer.createStream() }
+                .onFailure { Log.e(TAG, "T-one stream failed", it) }
+                .getOrNull()
+        }
+        if (stream == null) tone = null
         var committed = ""
         var smoothed = 0f
+        var wrote = 0
+        var strikes = 0
+        var reopens = 0
+        var platformStarted = false
+        var platformRetired = false
         try {
-            recorder.startRecording()
             while (!stopRequested.get()) {
-                val read = recorder.read(buffer, 0, buffer.size)
-                if (read <= 0) continue
+                val read = mic.record.read(buffer, 0, buffer.size)
+                val recording = mic.record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+                if (read < 0 || !recording) {
+                    strikes++
+                    if (strikes < 3) continue
+                    strikes = 0
+                    if (platformStarted && !platformRetired) {
+                        platformRetired = true
+                        platformStarted = false
+                        platform?.stop()
+                        _messages.tryEmit(
+                            "Микрофон отдан системному распознаванию. Аудио пишется дальше — для живого текста установите T-one.",
+                        )
+                    }
+                    if (reopens >= 2) break
+                    reopens++
+                    val reopened = runCatching { reopen(mic) }
+                    if (reopened.isFailure) {
+                        Log.e(TAG, "mic reopen failed", reopened.exceptionOrNull())
+                        break
+                    }
+                    mic = reopened.getOrThrow()
+                    buffer = ByteArray(mic.bufferSize)
+                    continue
+                }
+                strikes = 0
                 writer.write(buffer, read)
+                wrote += read
                 val floats = Pcm.toFloats(buffer, read)
                 smoothed = smoothed * 0.65f + Pcm.level(floats) * 0.35f
                 _level.value = smoothed
-                if (online != null && stream != null) {
-                    stream.acceptWaveform(floats, SAMPLE_RATE)
-                    while (online.isReady(stream)) online.decode(stream)
-                    val partial = online.getResult(stream).text.trim()
-                    if (online.isEndpoint(stream)) {
-                        if (partial.isNotBlank()) {
-                            committed = listOf(committed, partial).filter { it.isNotBlank() }.joinToString(" ")
-                        }
-                        online.reset(stream)
-                        _text.value = committed
-                    } else {
-                        _text.value = listOf(committed, partial).filter { it.isNotBlank() }.joinToString(" ")
+                if (tone != null && stream != null) {
+                    val fed = feedTone(tone, stream, floats, finish = false, committed)
+                    committed = fed.committed
+                    if (fed.failed) {
+                        runCatching { stream.release() }
+                        stream = null
+                        tone = null
                     }
+                }
+                if (
+                    platform != null &&
+                    !platformStarted &&
+                    !platformRetired &&
+                    wrote >= WARMUP_BYTES
+                ) {
+                    platform.start()
+                    platformStarted = true
                 }
                 pushWidgets()
             }
-            if (online != null && stream != null) {
-                stream.inputFinished()
-                while (online.isReady(stream)) online.decode(stream)
-                val tail = online.getResult(stream).text.trim()
-                if (tail.isNotBlank()) {
-                    committed = listOf(committed, tail).filter { it.isNotBlank() }.joinToString(" ")
-                }
+            if (tone != null && stream != null) {
+                val fed = feedTone(tone, stream, FloatArray(0), finish = true, committed)
+                committed = fed.committed
             }
         } finally {
-            runCatching { recorder.stop() }
-            recorder.release()
+            if (platformStarted) platform?.stop()
+            runCatching { mic.record.stop() }
+            runCatching { mic.record.release() }
             writer.close()
-            stream?.release()
+            stream?.let { runCatching { it.release() } }
         }
         return if (online != null) committed.ifBlank { _text.value } else _text.value
     }
 
-    private suspend fun finalize(file: File, live: String): String {
-        if (!models.isInstalled(ModelKind.GIGA_AM) || !file.exists() || file.length() < 44) {
-            return live.trim()
+    private data class ToneFeed(val committed: String, val failed: Boolean)
+
+    private fun feedTone(
+        recognizer: OnlineRecognizer,
+        stream: OnlineStream,
+        floats: FloatArray,
+        finish: Boolean,
+        committed: String,
+    ): ToneFeed {
+        var next = committed
+        val failed = runCatching {
+            if (finish) {
+                stream.inputFinished()
+            } else {
+                stream.acceptWaveform(floats, SAMPLE_RATE)
+            }
+            while (recognizer.isReady(stream)) recognizer.decode(stream)
+            val partial = recognizer.getResult(stream).text.trim()
+            if (!finish && recognizer.isEndpoint(stream)) {
+                if (partial.isNotBlank()) {
+                    next = listOf(next, partial).filter { it.isNotBlank() }.joinToString(" ")
+                }
+                recognizer.reset(stream)
+                _text.value = next
+            } else if (partial.isNotBlank() || next.isNotBlank()) {
+                next = listOf(next, partial).filter { it.isNotBlank() }.joinToString(" ")
+                if (!finish) _text.value = next
+            }
+        }.onFailure { Log.e(TAG, "T-one decode stopped", it) }.isFailure
+        return ToneFeed(next, failed)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openMic(): OpenMic {
+        val sources = intArrayOf(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC,
+        )
+        var failure = "Не удалось открыть микрофон"
+        for (source in sources) {
+            val min = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+            )
+            if (min <= 0) {
+                failure = "Микрофон недоступен"
+                continue
+            }
+            val bufferSize = max(min, SAMPLE_RATE / 5 * 2)
+            val recorder = AudioRecord(
+                source,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
+            )
+            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                recorder.release()
+                continue
+            }
+            val started = runCatching { recorder.startRecording() }.isSuccess &&
+                recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING
+            if (!started) {
+                recorder.release()
+                failure = "Микрофон занят"
+                continue
+            }
+            return OpenMic(recorder, bufferSize)
         }
-        val recognizer = withContext(Dispatchers.Default) {
-            SherpaEngines.offlineGiga(models.directory(ModelKind.GIGA_AM))
-        } ?: return live.trim()
+        error(failure)
+    }
+
+    private fun reopen(current: OpenMic): OpenMic {
+        runCatching { current.record.stop() }
+        current.record.release()
+        return openMic()
+    }
+
+    private data class OpenMic(val record: AudioRecord, val bufferSize: Int)
+
+    private suspend fun finalize(file: File, live: String): String {
+        val fallback = live.trim()
+        if (!models.isInstalled(ModelKind.GIGA_AM) || !file.exists() || file.length() < 44) {
+            return fallback
+        }
+        val recognizer = try {
+            withContext(Dispatchers.Default) {
+                SherpaEngines.offlineGiga(models.directory(ModelKind.GIGA_AM))
+            }
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            Log.e(TAG, "GigaAM init crashed", error)
+            null
+        } ?: return fallback
         return try {
             val text = withContext(Dispatchers.Default) {
                 SherpaEngines.transcribeFile(recognizer, file.absolutePath)
             }
-            text.ifBlank { live.trim() }
+            text.ifBlank { fallback }
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            Log.e(TAG, "GigaAM decode crashed", error)
+            fallback
         } finally {
-            recognizer.release()
+            runCatching { recognizer.release() }
         }
     }
 
@@ -228,5 +346,6 @@ class RecordingSession @Inject constructor(
     private companion object {
         const val TAG = "RecordingSession"
         const val SAMPLE_RATE = 16_000
+        const val WARMUP_BYTES = SAMPLE_RATE / 10 * 2
     }
 }

@@ -17,8 +17,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
+import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.DateRangeModal
 import com.alekseevich47.notes.ui.components.GlassBottomBar
 import com.alekseevich47.notes.ui.components.ShellTab
@@ -58,6 +61,8 @@ fun NotesRoot(
     val hazeState = remember { HazeState() }
     var showCalendar by remember { mutableStateOf(false) }
     var openedDone by remember { mutableStateOf<Long?>(null) }
+    var explainPermissions by remember { mutableStateOf(false) }
+    val micDenied = stringResource(R.string.permission_mic_denied)
 
     val permissions = buildList {
         add(Manifest.permission.RECORD_AUDIO)
@@ -65,7 +70,7 @@ fun NotesRoot(
     }
     val permissionState = rememberMultiplePermissionsState(permissions) { result ->
         if (result[Manifest.permission.RECORD_AUDIO] == true) shell.toggleRecording()
-        else shell.toast("Нужен доступ к микрофону")
+        else shell.toast(micDenied)
     }
 
     LaunchedEffect(pendingNoteId) {
@@ -75,8 +80,7 @@ fun NotesRoot(
     }
     LaunchedEffect(askForMic) {
         if (askForMic) {
-            shell.toast("Разрешите микрофон, чтобы записать заметку с виджета")
-            permissionState.launchMultiplePermissionRequest()
+            explainPermissions = true
             onMicPromptConsumed()
         }
     }
@@ -158,13 +162,25 @@ fun NotesRoot(
                         if (phase == MicPhase.RECORDING || micGranted) {
                             shell.toggleRecording()
                         } else {
-                            permissionState.launchMultiplePermissionRequest()
+                            explainPermissions = true
                         }
                     },
                     modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter),
                 )
             }
             ToastHost(message = toast, onDismiss = shell::dismissToast)
+            if (explainPermissions) {
+                AppDialog(
+                    title = stringResource(R.string.permission_mic_title),
+                    body = stringResource(R.string.permission_mic_rationale),
+                    confirm = stringResource(R.string.permission_continue),
+                    onConfirm = {
+                        explainPermissions = false
+                        permissionState.launchMultiplePermissionRequest()
+                    },
+                    onDismiss = { explainPermissions = false },
+                )
+            }
             if (showCalendar) {
                 DateRangeModal(
                     initial = range,

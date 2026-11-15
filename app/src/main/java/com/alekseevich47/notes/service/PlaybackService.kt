@@ -1,7 +1,6 @@
 package com.alekseevich47.notes.service
 
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -40,7 +39,7 @@ class PlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        ensureChannel()
+        AppChannels.ensure(this)
         session = MediaSession.Builder(this, notePlayer.player())
             .setId("notes-playback")
             .setSessionActivity(openPending(null))
@@ -113,7 +112,7 @@ class PlaybackService : Service() {
         val playIcon = if (state.playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         val playLabel = if (state.playing) "Пауза" else "Слушать"
         val duration = state.durationMs.coerceAtLeast(1L)
-        val builder = NotificationCompat.Builder(this, CHANNEL)
+        val builder = NotificationCompat.Builder(this, AppChannels.PLAYBACK)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(state.title.ifBlank { "Заметка" })
             .setContentText(format(state.positionMs) + " / " + format(state.durationMs))
@@ -144,16 +143,6 @@ class PlaybackService : Service() {
         return PendingIntent.getService(this, code, intent, pendingFlags())
     }
 
-    private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT < 26) return
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.channel_playback), NotificationManager.IMPORTANCE_LOW).apply {
-                setShowBadge(false)
-            },
-        )
-    }
-
     private fun pendingFlags(): Int {
         return PendingIntent.FLAG_UPDATE_CURRENT or
             if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
@@ -173,7 +162,6 @@ class PlaybackService : Service() {
         const val EXTRA_NOTE_ID = "note_id"
         const val EXTRA_PATH = "path"
         const val EXTRA_TITLE = "title"
-        private const val CHANNEL = "notes_playback"
         private const val NOTIF_ID = 43
     }
 }

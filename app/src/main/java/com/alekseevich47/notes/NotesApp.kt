@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.alekseevich47.notes.data.download.ModelDownloadManager
+import com.alekseevich47.notes.service.AppChannels
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -19,6 +20,7 @@ class NotesApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        AppChannels.ensure(this)
         downloads.recoverInterrupted()
     }
 }

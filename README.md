@@ -3,7 +3,7 @@
 Голосовые заметки Loomixx. Запись с микрофона, распознавание речи на устройстве и обычный редактор.
 
 - Package: `com.alekseevich47.notes` (debug: `com.alekseevich47.notes.debug`)
-- minSdk 26, target/compile 35, versionName 1.0.0, versionCode 1
+- minSdk 26, target/compile 35, versionName 1.0.1, versionCode 2
 - Контакты: loomixx.dev@yandex.ru · https://t.me/aalekseevich47
 
 ## Сборка
@@ -23,7 +23,7 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Что внутри
 
-Сразу после установки текст идёт через системный SpeechRecognizer (ru-RU). Модели T-one и GigaAM v3 ставятся в Настройках: прогресс, пауза, стоп, продолжение с HTTP Range. Запись с виджета 2×2 и 4×2 идёт через foreground-сервис. Готовая заметка открывается из уведомления.
+Сразу после установки текст идёт через системный SpeechRecognizer (ru-RU), но WAV всегда пишет AudioRecord: распознавание стартует только после того, как микрофон уже открыт, и отключается, если OEM отбирает захват. Когда установлена модель T-one, SpeechRecognizer не запускается — живой текст читается из того же PCM. GigaAM v3 ставится в Настройках вместе с T-one: прогресс, пауза, стоп, продолжение с HTTP Range. Запись с виджета 2×2 и 4×2 идёт через foreground-сервис. Готовая заметка открывается из уведомления.
 
 ## CI
 

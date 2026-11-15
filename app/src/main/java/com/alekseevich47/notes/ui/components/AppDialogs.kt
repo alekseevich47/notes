@@ -167,6 +167,8 @@ fun TableSizeDialog(
 ) {
     var rows by remember { mutableStateOf(2) }
     var cols by remember { mutableStateOf(2) }
+    val maxRows = 8
+    val maxCols = 6
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             modifier = Modifier
@@ -175,15 +177,52 @@ fun TableSizeDialog(
                 .clip(RoundedCornerShape(28.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Таблица", style = MaterialTheme.typography.titleLarge, fontFamily = NotesFont)
-            Spacer(Modifier.height(6.dp))
-            Text("Сколько строк и столбцов", color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = NotesFont)
-            Spacer(Modifier.height(16.dp))
-            Stepper("Строки", rows, 1, 8) { rows = it }
+            Text(
+                "Таблица",
+                style = MaterialTheme.typography.titleLarge,
+                fontFamily = NotesFont,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Отметьте размер, как в сообщении",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = NotesFont,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Spacer(Modifier.height(8.dp))
-            Stepper("Столбцы", cols, 1, 6) { cols = it }
-            Spacer(Modifier.height(18.dp))
+            Text(
+                "$rows × $cols",
+                fontFamily = NotesFont,
+                fontWeight = FontWeight.SemiBold,
+                color = NotesPurple,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.height(12.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(maxRows) { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        repeat(maxCols) { col ->
+                            val selected = row < rows && col < cols
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(
+                                        if (selected) NotesPurple else MaterialTheme.colorScheme.surfaceVariant,
+                                    )
+                                    .clickable {
+                                        rows = row + 1
+                                        cols = col + 1
+                                    },
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Text(
                     "Отмена",
@@ -200,34 +239,5 @@ fun TableSizeDialog(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun Stepper(label: String, value: Int, min: Int, max: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Text(label, modifier = Modifier.weight(1f), fontFamily = NotesFont)
-        StepButton("−") { if (value > min) onChange(value - 1) }
-        Text(
-            value.toString(),
-            modifier = Modifier.padding(horizontal = 14.dp),
-            fontFamily = NotesFont,
-            fontWeight = FontWeight.SemiBold,
-        )
-        StepButton("+") { if (value < max) onChange(value + 1) }
-    }
-}
-
-@Composable
-private fun StepButton(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, fontFamily = NotesFont, fontWeight = FontWeight.Bold)
     }
 }

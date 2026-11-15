@@ -79,7 +79,7 @@ object NoteDocuments {
             val from = mark.start.coerceIn(0, chars.size)
             val to = mark.end.coerceIn(0, chars.size)
             for (index in from until to) {
-                if (chars[index] != '\n') chars[index] = '•'
+                if (chars[index] != '\n') chars[index] = '▒'
             }
         }
         val flat = String(chars).replace('\n', ' ').replace(Regex("\\s+"), " ").trim()

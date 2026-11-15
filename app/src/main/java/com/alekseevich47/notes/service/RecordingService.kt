@@ -2,7 +2,6 @@ package com.alekseevich47.notes.service
 
 import android.Manifest
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -64,10 +63,11 @@ class RecordingService : Service() {
             job = scope.launch {
                 val frames = launch {
                     while (isActive) {
-                        if (session.phase.value == MicPhase.PROCESSING) {
+                        val current = session.phase.value
+                        if (current == MicPhase.PROCESSING || current == MicPhase.DONE) {
                             WidgetUpdater.bumpFrame(this@RecordingService)
                         }
-                        delay(280)
+                        delay(if (current == MicPhase.PROCESSING) 110 else 150)
                     }
                 }
                 val noteId = runCatching { session.recordAndSave() }.getOrNull()
@@ -124,7 +124,7 @@ class RecordingService : Service() {
             Intent(this, RecordingService::class.java).setAction(ACTION_STOP),
             pendingFlags(),
         )
-        return NotificationCompat.Builder(this, CHANNEL_RECORDING)
+        return NotificationCompat.Builder(this, AppChannels.RECORDING)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle("Запись заметки")
             .setContentText(text)
@@ -147,7 +147,7 @@ class RecordingService : Service() {
             },
             pendingFlags(),
         )
-        val notification = NotificationCompat.Builder(this, CHANNEL_READY)
+        val notification = NotificationCompat.Builder(this, AppChannels.READY)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle("Заметка готова")
             .setContentText(session.liveText.value.ifBlank { "Аудио сохранено" }.take(80))
@@ -158,14 +158,7 @@ class RecordingService : Service() {
     }
 
     private fun ensureChannels() {
-        if (Build.VERSION.SDK_INT < 26) return
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_RECORDING, getString(R.string.channel_recording), NotificationManager.IMPORTANCE_LOW),
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_READY, getString(R.string.channel_ready), NotificationManager.IMPORTANCE_DEFAULT),
-        )
+        AppChannels.ensure(this)
     }
 
     private fun acquireWake() {
@@ -190,8 +183,6 @@ class RecordingService : Service() {
         const val ACTION_START = "com.alekseevich47.notes.record.START"
         const val ACTION_STOP = "com.alekseevich47.notes.record.STOP"
         const val ACTION_TOGGLE = "com.alekseevich47.notes.record.TOGGLE"
-        private const val CHANNEL_RECORDING = "notes_recording"
-        private const val CHANNEL_READY = "notes_ready"
         private const val ONGOING_ID = 41
         private const val READY_ID = 42
     }

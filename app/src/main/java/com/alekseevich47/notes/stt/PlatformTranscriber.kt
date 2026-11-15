@@ -8,10 +8,16 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
- * System ru-RU recognizer used when the T-one model is not installed.
- * Final chunks are kept and listening restarts so a long note does not stop at the first pause.
+ * System ru-RU recognizer used only when T-one is not loaded.
+ * SpeechRecognizer opens its own capture. On some OEMs that capture is
+ * exclusive, so [RecordingSession] starts this after AudioRecord is already
+ * rolling and stops it (and waits) if the file writer loses the microphone.
+ * Final chunks are kept and listening restarts so a long note does not stop
+ * at the first pause.
  */
 class PlatformTranscriber(
     context: Context,
@@ -36,12 +42,23 @@ class PlatformTranscriber(
 
     fun stop() {
         running = false
-        main.post {
-            recognizer?.stopListening()
-            recognizer?.cancel()
-            recognizer?.destroy()
-            recognizer = null
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            releaseRecognizer()
+            return
         }
+        val done = CountDownLatch(1)
+        main.post {
+            releaseRecognizer()
+            done.countDown()
+        }
+        done.await(500, TimeUnit.MILLISECONDS)
+    }
+
+    private fun releaseRecognizer() {
+        recognizer?.stopListening()
+        recognizer?.cancel()
+        recognizer?.destroy()
+        recognizer = null
     }
 
     private fun listen() {
