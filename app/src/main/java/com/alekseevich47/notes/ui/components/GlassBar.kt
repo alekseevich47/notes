@@ -12,16 +12,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.StickyNote2
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.alekseevich47.notes.domain.MicPhase
-import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import dev.chrisbanes.haze.HazeState
 
@@ -56,9 +58,13 @@ fun GlassBottomBar(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                BarLabel("Заметки", tab == ShellTab.NOTES, Modifier.weight(1f)) { onTab(ShellTab.NOTES) }
+                BarIcon(Icons.Outlined.StickyNote2, "Заметки", tab == ShellTab.NOTES, Modifier.weight(1f)) {
+                    onTab(ShellTab.NOTES)
+                }
                 Spacer(Modifier.width(92.dp))
-                BarLabel("Настройки", tab == ShellTab.SETTINGS, Modifier.weight(1f)) { onTab(ShellTab.SETTINGS) }
+                BarIcon(Icons.Outlined.Settings, "Настройки", tab == ShellTab.SETTINGS, Modifier.weight(1f)) {
+                    onTab(ShellTab.SETTINGS)
+                }
             }
         }
         MicButton(
@@ -73,8 +79,9 @@ fun GlassBottomBar(
 }
 
 @Composable
-private fun BarLabel(
-    text: String,
+private fun BarIcon(
+    icon: ImageVector,
+    label: String,
     selected: Boolean,
     modifier: Modifier,
     onClick: () -> Unit,
@@ -86,11 +93,11 @@ private fun BarLabel(
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            fontFamily = NotesFont,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (selected) NotesPurple else MaterialTheme.colorScheme.onSurfaceVariant,
+        Icon(
+            icon,
+            contentDescription = label,
+            modifier = Modifier.size(24.dp),
+            tint = if (selected) NotesPurple else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
