@@ -200,6 +200,53 @@ class PlaybackSnapshotTest {
         assertFalse(PlaybackSnapshot.sameItem(null, 8L))
     }
 
+    @Test
+    fun playCommandShowsPauseBeforeExoReportsIsPlaying() {
+        assertTrue(PlaybackSnapshot.sessionMatches(sessionNoteId = 4L, currentMediaId = null, noteId = 4L))
+        assertTrue(PlaybackSnapshot.sessionMatches(sessionNoteId = null, currentMediaId = "4", noteId = 4L))
+        assertFalse(PlaybackSnapshot.sessionMatches(sessionNoteId = 4L, currentMediaId = "4", noteId = 5L))
+        assertFalse(PlaybackSnapshot.endedOnTimeline(timelineMatches = false, playbackEnded = true))
+
+        val started = PlaybackSnapshot.project(
+            reportedPositionMs = 40_000L,
+            reportedDurationMs = 90_000L,
+            playing = true,
+            ended = false,
+            mediaMatches = PlaybackSnapshot.commandVisible(timelineMatches = false, holdingDuration = true),
+            holdDuration = true,
+        )
+        assertTrue(started.playing)
+        assertEquals(0L, started.positionMs)
+        assertEquals(0L, started.durationMs)
+        assertEquals(PlaybackSnapshot.TICK_MS, PlaybackSnapshot.pollIntervalMs(started.playing))
+    }
+
+    @Test
+    fun secondPlayPausesAndAPausedToggleKeepsThePosition() {
+        assertTrue(
+            PlaybackSnapshot.pauseInstead(sessionMatches = true, commandedPlaying = true, ended = false),
+        )
+        assertFalse(
+            PlaybackSnapshot.pauseInstead(sessionMatches = true, commandedPlaying = true, ended = true),
+        )
+        assertFalse(
+            PlaybackSnapshot.pauseInstead(sessionMatches = true, commandedPlaying = false, ended = false),
+        )
+        assertFalse(
+            PlaybackSnapshot.pauseInstead(sessionMatches = false, commandedPlaying = true, ended = false),
+        )
+
+        val paused = reading(position = 4_200L, playing = false)
+        assertFalse(paused.playing)
+        assertEquals(4_200L, paused.positionMs)
+        assertFalse(PlaybackSnapshot.replayFromStart(ended = false))
+
+        val resumed = reading(position = 4_200L, playing = true)
+        assertTrue(resumed.playing)
+        assertEquals(4_200L, resumed.positionMs)
+        assertEquals(10_000L, resumed.durationMs)
+    }
+
     private fun reading(
         position: Long,
         playing: Boolean,

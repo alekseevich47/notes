@@ -35,6 +35,9 @@ object PlaybackSnapshot {
         seekOverrideMs: Long? = null,
     ): PlaybackReading {
         if (!mediaMatches) {
+            // The timeline still belongs to the previous item. Drop its clock.
+            // Callers pass mediaMatches for an explicit play/pause command via commandVisible,
+            // including while the new duration is held at 0, so this branch does not eat that command.
             return PlaybackReading(positionMs = 0L, durationMs = 0L, playing = false)
         }
         if (holdDuration) {
@@ -82,6 +85,35 @@ object PlaybackSnapshot {
 
     fun sameItem(currentMediaId: String?, noteId: Long): Boolean {
         return currentMediaId != null && currentMediaId == noteId.toString()
+    }
+
+    /**
+     * The note already loaded for this session. [currentMediaId] lags setMediaItem,
+     * but the session id is written on the same frame as play().
+     */
+    fun sessionMatches(sessionNoteId: Long?, currentMediaId: String?, noteId: Long): Boolean {
+        return sessionNoteId == noteId || sameItem(currentMediaId, noteId)
+    }
+
+    /**
+     * A second play for the note that is already running pauses at the current position.
+     * Ended playback is not running: the next play starts again from 0.
+     */
+    fun pauseInstead(sessionMatches: Boolean, commandedPlaying: Boolean, ended: Boolean): Boolean {
+        return sessionMatches && commandedPlaying && !ended
+    }
+
+    /** Stale ENDED from the previous item is not the end of this note. */
+    fun endedOnTimeline(timelineMatches: Boolean, playbackEnded: Boolean): Boolean {
+        return timelineMatches && playbackEnded
+    }
+
+    /**
+     * Show the explicit play/pause command while the new item's duration is still held at 0.
+     * Passing this as [project]'s mediaMatches keeps that command on the same frame as play() and pause().
+     */
+    fun commandVisible(timelineMatches: Boolean, holdingDuration: Boolean): Boolean {
+        return timelineMatches || holdingDuration
     }
 
     fun seekTarget(positionMs: Long, deltaMs: Long, durationMs: Long): Long {

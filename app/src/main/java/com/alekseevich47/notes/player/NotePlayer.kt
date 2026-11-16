@@ -34,10 +34,14 @@ class NotePlayer @Inject constructor(
     private var sawGap = false
     private var applyingMedia = false
     private var tickerPosted = false
+    /** Play/pause written on the same call as play() and pause(), before ExoPlayer reports isPlaying. */
+    private var commandedPlaying = false
+    /** Replay seek is in flight, so a leftover ENDED must not drop the new play command. */
+    private var replaying = false
 
     private val tick = Runnable {
         tickerPosted = false
-        if (!active || exo?.isPlaying != true) return@Runnable
+        if (!active || !commandedPlaying) return@Runnable
         publish()
     }
 
@@ -55,6 +59,8 @@ class NotePlayer @Inject constructor(
         val file = File(path)
         if (!file.isFile) {
             active = false
+            commandedPlaying = false
+            replaying = false
             holdDuration = false
             sawGap = false
             cancelTicker()
@@ -65,14 +71,22 @@ class NotePlayer @Inject constructor(
         }
         active = true
         val player = player()
-        val same = PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, noteId)
+        val timelineSame = PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, noteId)
+        val same = PlaybackSnapshot.sessionMatches(_state.value.noteId, player.currentMediaItem?.mediaId, noteId)
+        val ended = PlaybackSnapshot.endedOnTimeline(timelineSame, player.playbackState == Player.STATE_ENDED)
+        if (PlaybackSnapshot.pauseInstead(same, commandedPlaying, ended)) {
+            pauseAt(player, noteId, title)
+            return@onMain
+        }
         var replay = false
         if (!same) {
+            commandedPlaying = true
+            replaying = false
             staleDurationMs = player.duration.takeIf { it > 0L } ?: 0L
             sawGap = false
             holdDuration = true
             cancelTicker()
-            _state.value = PlaybackSnapshot.opening(noteId, title)
+            _state.value = PlaybackSnapshot.opening(noteId, title).copy(playing = true)
             notifyListeners()
             applyingMedia = true
             try {
@@ -91,10 +105,13 @@ class NotePlayer @Inject constructor(
             // left the old timeline, the next publish can show the new duration.
             noteGap(player)
             settle(timelineOrMedia = true)
-        } else if (PlaybackSnapshot.replayFromStart(player.playbackState == Player.STATE_ENDED)) {
+        } else if (PlaybackSnapshot.replayFromStart(ended)) {
             replay = true
+            replaying = true
+            commandedPlaying = true
             player.seekTo(0)
         }
+        commandedPlaying = true
         player.play()
         publish(noteId, title, seekOverrideMs = if (replay) 0L else null)
     }
@@ -102,15 +119,29 @@ class NotePlayer @Inject constructor(
     fun toggle() = onMain {
         val player = exo ?: return@onMain
         if (!active) return@onMain
-        if (player.isPlaying) {
-            player.pause()
-            publish()
+        val noteId = _state.value.noteId
+        val timelineSame = noteId != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, noteId)
+        val ended = PlaybackSnapshot.endedOnTimeline(timelineSame, player.playbackState == Player.STATE_ENDED)
+        if (PlaybackSnapshot.pauseInstead(sessionMatches = true, commandedPlaying = commandedPlaying, ended = ended)) {
+            pauseAt(player)
             return@onMain
         }
-        val replay = PlaybackSnapshot.replayFromStart(player.playbackState == Player.STATE_ENDED)
-        if (replay) player.seekTo(0)
+        val replay = PlaybackSnapshot.replayFromStart(ended)
+        if (replay) {
+            replaying = true
+            commandedPlaying = true
+            player.seekTo(0)
+        }
+        commandedPlaying = true
         player.play()
         publish(seekOverrideMs = if (replay) 0L else null)
+    }
+
+    private fun pauseAt(player: ExoPlayer, noteId: Long? = _state.value.noteId, title: String = _state.value.title) {
+        commandedPlaying = false
+        replaying = false
+        player.pause()
+        publish(noteId, title)
     }
 
     fun seekBy(deltaMs: Long) = onMain {
@@ -137,6 +168,8 @@ class NotePlayer @Inject constructor(
 
     fun stop() = onMain {
         active = false
+        commandedPlaying = false
+        replaying = false
         holdDuration = false
         sawGap = false
         cancelTicker()
@@ -148,6 +181,8 @@ class NotePlayer @Inject constructor(
 
     fun release() = onMain {
         active = false
+        commandedPlaying = false
+        replaying = false
         holdDuration = false
         sawGap = false
         applyingMedia = false
@@ -255,12 +290,19 @@ class NotePlayer @Inject constructor(
         if (!active) return
         val player = exo ?: return
         val id = noteId
+        val timelineMatches = id != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, id)
+        if (replaying && player.playbackState != Player.STATE_ENDED) replaying = false
+        val ended = PlaybackSnapshot.endedOnTimeline(
+            timelineMatches,
+            player.playbackState == Player.STATE_ENDED,
+        ) && !replaying
+        if (ended && seekOverrideMs == null) commandedPlaying = false
         val reading = PlaybackSnapshot.project(
             reportedPositionMs = player.currentPosition,
             reportedDurationMs = player.duration,
-            playing = player.isPlaying,
-            ended = player.playbackState == Player.STATE_ENDED,
-            mediaMatches = id != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, id),
+            playing = commandedPlaying,
+            ended = ended,
+            mediaMatches = PlaybackSnapshot.commandVisible(timelineMatches, holdDuration),
             holdDuration = holdDuration,
             seekOverrideMs = seekOverrideMs,
         )
