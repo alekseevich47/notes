@@ -14,6 +14,7 @@ import androidx.media3.session.MediaStyleNotificationHelper
 import com.alekseevich47.notes.MainActivity
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.player.NotePlayer
+import com.alekseevich47.notes.player.PlaybackSnapshot
 import com.alekseevich47.notes.player.PlayerUi
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -71,15 +72,21 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         ticker?.cancel()
+        ticker = null
         notePlayer.removeListener(refresh)
         session?.release()
         session = null
+        notePlayer.release()
         scope.cancel()
         super.onDestroy()
     }
 
     private fun show(state: PlayerUi) {
-        if (state.noteId == null) return
+        if (state.noteId == null || !scope.isActive) {
+            ticker?.cancel()
+            ticker = null
+            return
+        }
         val notification = buildNotification(state)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -89,16 +96,18 @@ class PlaybackService : Service() {
         if (state.playing && ticker?.isActive != true) {
             ticker = scope.launch {
                 while (isActive) {
-                    delay(800)
+                    delay(NOTIF_POLL_MS)
                     val current = notePlayer.state.value
-                    if (current.playing) {
-                        val manager = getSystemService(NotificationManager::class.java)
-                        manager.notify(NOTIF_ID, buildNotification(current))
-                    }
+                    if (!current.playing || current.noteId == null) break
+                    val manager = getSystemService(NotificationManager::class.java)
+                    manager.notify(NOTIF_ID, buildNotification(current))
                 }
             }
         }
-        if (!state.playing) ticker?.cancel()
+        if (!state.playing) {
+            ticker?.cancel()
+            ticker = null
+        }
     }
 
     private fun buildNotification(state: PlayerUi): Notification {
@@ -115,7 +124,7 @@ class PlaybackService : Service() {
         val builder = NotificationCompat.Builder(this, AppChannels.PLAYBACK)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(state.title.ifBlank { "Заметка" })
-            .setContentText(format(state.positionMs) + " / " + format(state.durationMs))
+            .setContentText(PlaybackSnapshot.clock(state.positionMs) + " / " + PlaybackSnapshot.clock(state.durationMs))
             .setContentIntent(open)
             .setOnlyAlertOnce(true)
             .setOngoing(state.playing)
@@ -148,11 +157,6 @@ class PlaybackService : Service() {
             if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
     }
 
-    private fun format(ms: Long): String {
-        val total = (ms / 1000).coerceAtLeast(0)
-        return "%d:%02d".format(total / 60, total % 60)
-    }
-
     companion object {
         const val ACTION_PLAY = "com.alekseevich47.notes.play.PLAY"
         const val ACTION_TOGGLE = "com.alekseevich47.notes.play.TOGGLE"
@@ -163,5 +167,6 @@ class PlaybackService : Service() {
         const val EXTRA_PATH = "path"
         const val EXTRA_TITLE = "title"
         private const val NOTIF_ID = 43
+        private const val NOTIF_POLL_MS = 800L
     }
 }
