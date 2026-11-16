@@ -51,8 +51,6 @@ private class WidgetWordsFactory(
 
     override fun getViewTypeCount(): Int = 2
 
-    override fun getItemViewType(position: Int): Int = if (prompt) 1 else 0
-
     override fun getViewAt(position: Int): RemoteViews {
         val promptRow = prompt
         val layout = if (promptRow) R.layout.widget_prompt_line else R.layout.widget_word_line
