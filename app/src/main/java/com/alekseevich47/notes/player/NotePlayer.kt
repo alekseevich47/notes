@@ -9,6 +9,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.exoplayer.ExoPlayer
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,14 +18,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
-
-data class PlayerUi(
-    val noteId: Long? = null,
-    val title: String = "",
-    val playing: Boolean = false,
-    val positionMs: Long = 0,
-    val durationMs: Long = 0,
-)
 
 @Singleton
 class NotePlayer @Inject constructor(
@@ -35,6 +28,18 @@ class NotePlayer @Inject constructor(
     private val _state = MutableStateFlow(PlayerUi())
     val state: StateFlow<PlayerUi> = _state.asStateFlow()
     private val listeners = mutableSetOf<() -> Unit>()
+    private var active = false
+    private var holdDuration = false
+    private var staleDurationMs = 0L
+    private var sawGap = false
+    private var applyingMedia = false
+    private var tickerPosted = false
+
+    private val tick = Runnable {
+        tickerPosted = false
+        if (!active || exo?.isPlaying != true) return@Runnable
+        publish()
+    }
 
     fun addListener(listener: () -> Unit) {
         listeners += listener
@@ -49,50 +54,107 @@ class NotePlayer @Inject constructor(
     fun play(noteId: Long, path: String, title: String) = onMain {
         val file = File(path)
         if (!file.isFile) {
+            active = false
+            holdDuration = false
+            sawGap = false
+            cancelTicker()
+            exo?.pause()
             _state.value = PlayerUi()
             notifyListeners()
             return@onMain
         }
+        active = true
         val player = player()
-        val same = player.currentMediaItem?.mediaId == noteId.toString()
+        val same = PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, noteId)
+        var replay = false
         if (!same) {
-            player.setMediaItem(
-                MediaItem.Builder()
-                    .setMediaId(noteId.toString())
-                    .setUri(Uri.fromFile(file))
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
-                    .build(),
-            )
-            player.prepare()
+            staleDurationMs = player.duration.takeIf { it > 0L } ?: 0L
+            sawGap = false
+            holdDuration = true
+            cancelTicker()
+            _state.value = PlaybackSnapshot.opening(noteId, title)
+            notifyListeners()
+            applyingMedia = true
+            try {
+                player.setMediaItem(
+                    MediaItem.Builder()
+                        .setMediaId(noteId.toString())
+                        .setUri(Uri.fromFile(file))
+                        .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+                        .build(),
+                )
+                player.prepare()
+            } finally {
+                applyingMedia = false
+            }
+            // Sync listener flushes inside prepare are ignored. If that call already
+            // left the old timeline, the next publish can show the new duration.
+            noteGap(player)
+            settle(timelineOrMedia = true)
+        } else if (PlaybackSnapshot.replayFromStart(player.playbackState == Player.STATE_ENDED)) {
+            replay = true
+            player.seekTo(0)
         }
         player.play()
-        publish(noteId, title)
+        publish(noteId, title, seekOverrideMs = if (replay) 0L else null)
     }
 
     fun toggle() = onMain {
         val player = exo ?: return@onMain
-        if (player.isPlaying) player.pause() else player.play()
-        publish()
+        if (!active) return@onMain
+        if (player.isPlaying) {
+            player.pause()
+            publish()
+            return@onMain
+        }
+        val replay = PlaybackSnapshot.replayFromStart(player.playbackState == Player.STATE_ENDED)
+        if (replay) player.seekTo(0)
+        player.play()
+        publish(seekOverrideMs = if (replay) 0L else null)
     }
 
     fun seekBy(deltaMs: Long) = onMain {
         val player = exo ?: return@onMain
-        val duration = player.duration.coerceAtLeast(0L)
-        val target = (player.currentPosition + deltaMs).coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
+        if (!active) return@onMain
+        val duration = if (holdDuration) 0L else PlaybackSnapshot.knownDuration(player.duration)
+        val target = PlaybackSnapshot.seekTarget(player.currentPosition, deltaMs, duration)
         player.seekTo(target)
-        publish()
+        publish(seekOverrideMs = target)
     }
 
     fun seekFraction(fraction: Float) = onMain {
         val player = exo ?: return@onMain
-        val duration = player.duration
-        if (duration > 0) player.seekTo((duration * fraction.coerceIn(0f, 1f)).toLong())
-        publish()
+        if (!active) return@onMain
+        val duration = if (holdDuration) 0L else PlaybackSnapshot.knownDuration(player.duration)
+        val target = PlaybackSnapshot.fractionTarget(duration, fraction)
+        if (target == null) {
+            publish()
+            return@onMain
+        }
+        player.seekTo(target)
+        publish(seekOverrideMs = target)
     }
 
     fun stop() = onMain {
+        active = false
+        holdDuration = false
+        sawGap = false
+        cancelTicker()
         exo?.stop()
         exo?.clearMediaItems()
+        _state.value = PlayerUi()
+        notifyListeners()
+    }
+
+    fun release() = onMain {
+        active = false
+        holdDuration = false
+        sawGap = false
+        applyingMedia = false
+        cancelTicker()
+        val player = exo
+        exo = null
+        player?.release()
         _state.value = PlayerUi()
         notifyListeners()
     }
@@ -109,22 +171,121 @@ class NotePlayer @Inject constructor(
             .build()
             .also { player ->
                 player.addListener(object : Player.Listener {
-                    override fun onIsPlayingChanged(isPlaying: Boolean) = publish()
-                    override fun onPlaybackStateChanged(playbackState: Int) = publish()
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (applyingMedia || !active) return
+                        settle(timelineOrMedia = false)
+                        publish()
+                    }
+
+                    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                        if (applyingMedia || !active) return
+                        settle(timelineOrMedia = true)
+                        publish()
+                    }
+
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        if (applyingMedia || !active) return
+                        settle(timelineOrMedia = true)
+                        publish()
+                    }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        if (applyingMedia || !active) return
+                        publish()
+                    }
+
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int,
+                    ) {
+                        if (applyingMedia || !active) return
+                        if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                            publish(seekOverrideMs = newPosition.positionMs)
+                        } else {
+                            publish()
+                        }
+                    }
+
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        if (applyingMedia || !active) return
+                        val timeline = events.containsAny(
+                            Player.EVENT_TIMELINE_CHANGED,
+                            Player.EVENT_MEDIA_ITEM_TRANSITION,
+                        )
+                        val interesting = timeline || events.containsAny(
+                            Player.EVENT_PLAYBACK_STATE_CHANGED,
+                            Player.EVENT_IS_PLAYING_CHANGED,
+                            Player.EVENT_POSITION_DISCONTINUITY,
+                        )
+                        if (!interesting) return
+                        // Runs after the specific callbacks, so a ready duration is visible here too.
+                        settle(timelineOrMedia = timeline)
+                        publish()
+                    }
                 })
             }
     }
 
-    private fun publish(noteId: Long? = _state.value.noteId, title: String = _state.value.title) {
-        val player = exo
-        _state.value = PlayerUi(
-            noteId = noteId,
-            title = title,
-            playing = player?.isPlaying == true,
-            positionMs = player?.currentPosition ?: 0L,
-            durationMs = player?.duration?.takeIf { it > 0 } ?: 0L,
+    private fun noteGap(player: Player) {
+        val ready = player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_ENDED
+        if (!ready || player.duration <= 0L) sawGap = true
+    }
+
+    private fun settle(timelineOrMedia: Boolean) {
+        if (applyingMedia || !active) return
+        val player = exo ?: return
+        noteGap(player)
+        val ready = player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_ENDED
+        holdDuration = PlaybackSnapshot.stillHolding(
+            holding = holdDuration,
+            reportedDurationMs = player.duration,
+            staleDurationMs = staleDurationMs,
+            readyOrEnded = ready,
+            timelineOrMedia = timelineOrMedia,
+            sawGap = sawGap,
         )
-        notifyListeners()
+    }
+
+    private fun publish(
+        noteId: Long? = _state.value.noteId,
+        title: String = _state.value.title,
+        seekOverrideMs: Long? = null,
+    ) {
+        if (!active) return
+        val player = exo ?: return
+        val id = noteId
+        val reading = PlaybackSnapshot.project(
+            reportedPositionMs = player.currentPosition,
+            reportedDurationMs = player.duration,
+            playing = player.isPlaying,
+            ended = player.playbackState == Player.STATE_ENDED,
+            mediaMatches = id != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, id),
+            holdDuration = holdDuration,
+            seekOverrideMs = seekOverrideMs,
+        )
+        val next = PlayerUi(
+            noteId = id,
+            title = title,
+            playing = reading.playing,
+            positionMs = reading.positionMs,
+            durationMs = reading.durationMs,
+        )
+        val previous = _state.value
+        _state.value = next
+        if (next != previous) notifyListeners()
+        if (PlaybackSnapshot.pollIntervalMs(reading.playing) == null) cancelTicker() else scheduleTicker()
+    }
+
+    private fun scheduleTicker() {
+        if (tickerPosted) return
+        tickerPosted = true
+        main.postDelayed(tick, PlaybackSnapshot.TICK_MS)
+    }
+
+    private fun cancelTicker() {
+        tickerPosted = false
+        main.removeCallbacks(tick)
     }
 
     private fun notifyListeners() {
