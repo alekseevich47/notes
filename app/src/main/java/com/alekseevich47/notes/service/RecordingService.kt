@@ -67,10 +67,21 @@ class RecordingService : Service() {
                 val frames = launch {
                     while (isActive) {
                         val current = session.phase.value
-                        if (current == MicPhase.PROCESSING || current == MicPhase.DONE) {
-                            WidgetUpdater.bumpFrame(this@RecordingService)
+                        when (current) {
+                            MicPhase.RECORDING -> {
+                                WidgetUpdater.pulse(this@RecordingService, session.level.value)
+                                delay(64)
+                            }
+                            MicPhase.PROCESSING -> {
+                                WidgetUpdater.pulse(this@RecordingService, 0f)
+                                delay(72)
+                            }
+                            MicPhase.DONE -> {
+                                WidgetUpdater.pulse(this@RecordingService, 0f)
+                                delay(64)
+                            }
+                            MicPhase.IDLE -> delay(40)
                         }
-                        delay(if (current == MicPhase.PROCESSING) 110 else 150)
                     }
                 }
                 val noteId = runCatching { session.recordAndSave() }.getOrNull()

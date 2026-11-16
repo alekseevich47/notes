@@ -8,4 +8,5 @@
     <color name="widget_muted">#FF8A809E</color>
     <color name="widget_mic_idle">#FFE4DCFF</color>
     <color name="widget_mic_rec">#FF3A237A</color>
+    <color name="widget_mic_done">#FF2F9E44</color>
 </resources>

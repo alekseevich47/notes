@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Заметки</string>
-    <string name="widget_2x2_name">Микрофон</string>
-    <string name="widget_4x2_name">Микрофон и текст</string>
-    <string name="widget_2x2_desc">Круглая кнопка записи заметки</string>
-    <string name="widget_4x2_desc">Запись с живым текстом</string>
+    <string name="widget_2x2_name">Микрофон 1×1</string>
+    <string name="widget_4x2_name">Микрофон и текст 4×1</string>
+    <string name="widget_2x2_desc">Кнопка записи заметки, размер 1×1</string>
+    <string name="widget_4x2_desc">Запись с живым текстом, размер 4×1</string>
+    <string name="widget_prompt">Нажмите на микрофон, чтобы создать заметку</string>
     <string name="channel_recording">Запись заметки</string>
     <string name="channel_recording_desc">Показывает, что голосовая заметка записывается, и даёт её остановить.</string>
     <string name="channel_ready">Готовые заметки</string>

@@ -1,59 +1,104 @@
 package com.alekseevich47.notes.ui.widgets
 
+import com.alekseevich47.notes.domain.MicPhase
+import kotlin.math.sin
+
 /**
- * Frame tables for the home-screen widgets. RemoteViews has no animator, so the
- * service steps these by hand: mic pulse, processing dot wave, check pop, and
- * the 4×2 transcript fade.
+ * Motion for the home-screen widgets. RemoteViews has no animator, so the
+ * recording service samples these often: mic zoom and purple glow follow the
+ * audio level, and the processing dots step through a dense overlapping wave.
  */
 object WidgetMotion {
-    const val FRAME_COUNT = 6
+    const val DOT_FRAMES = 24
+    const val FADE_FRAMES = 6
+    const val DOT_PHASE = 0.16f
+    const val SAVED_NOTE_PROMPT = "Нажмите на микрофон, чтобы создать заметку"
 
-    fun dotFrame(frame: Int): Int = frame.mod(FRAME_COUNT)
+    fun dotFrame(frame: Int): Int = frame.mod(DOT_FRAMES)
 
-    fun recordingScale(frame: Int, level: Float): Float {
-        val wave = floatArrayOf(0.96f, 1.0f, 1.05f, 1.08f, 1.02f, 0.98f)
-        return wave[frame.mod(FRAME_COUNT)] + level.coerceIn(0f, 1f) * 0.07f
+    /** -1..1 lift for dot [index]. Neighbouring dots share the wave with a phase offset. */
+    fun dotLift(frame: Int, index: Int): Float {
+        val cycle = frame.mod(DOT_FRAMES) / DOT_FRAMES.toFloat() - index * DOT_PHASE
+        return sin(cycle * 2.0 * Math.PI).toFloat()
     }
 
-    fun recordingAlpha(frame: Int, level: Float): Float {
-        val wave = floatArrayOf(0.82f, 0.9f, 1f, 0.96f, 0.88f, 0.84f)
-        val floor = 0.78f + level.coerceIn(0f, 1f) * 0.22f
-        return (floor * wave[frame.mod(FRAME_COUNT)]).coerceIn(0.72f, 1f)
+    fun recordingScale(level: Float): Float = 1f + smoothstep(level) * 0.12f
+
+    fun glowAlpha(level: Float): Float = 0.22f + smoothstep(level) * 0.78f
+
+    fun glowScale(level: Float): Float = 1f + smoothstep(level) * 0.08f
+
+    /** Glide toward [target] so sparse audio levels still look continuous. */
+    fun easeLevel(current: Float, target: Float): Float {
+        val from = unit(current)
+        val to = unit(target)
+        return from + (to - from) * 0.62f
     }
 
-    fun processingScale(frame: Int): Float {
-        val wave = floatArrayOf(0.92f, 0.97f, 1.04f, 1.08f, 1.0f, 0.94f)
-        return wave[frame.mod(FRAME_COUNT)]
+    fun wordFadeAlpha(fadeFrame: Int): Float {
+        val eased = smoothstep(fadeProgress(fadeFrame))
+        return 0.72f + 0.28f * eased
     }
 
-    fun doneScale(frame: Int): Float {
-        val pop = floatArrayOf(0.70f, 0.86f, 1.08f, 1.02f, 1f, 1f)
-        return pop[frame.mod(FRAME_COUNT)]
+    fun wordSlideDp(fadeFrame: Int): Float {
+        val eased = smoothstep(fadeProgress(fadeFrame))
+        return (1f - eased) * 4f
+    }
+
+    fun shouldResetFade(previous: List<String>, next: List<String>): Boolean = previous != next
+
+    fun charsForWidth(widgetWidthDp: Int): Int {
+        val textDp = (widgetWidthDp - 62).coerceAtLeast(96)
+        return (textDp / 7.4f).toInt().coerceIn(12, 80)
     }
 
     /**
-     * Older lines are a fixed fraction of the newest line. The newest line
-     * eases from dim to opaque across [FRAME_COUNT] steps, so a rolled
-     * transcript fades in instead of popping.
+     * Pack [text] into lines. A word that does not fit the current line moves
+     * intact onto the next line.
      */
-    fun transcriptAlpha(line: Int, count: Int, fadeFrame: Int): Float {
-        if (count <= 0 || line !in 0 until count) return 0f
-        val steps = floatArrayOf(0.40f, 0.56f, 0.70f, 0.82f, 0.93f, 1f)
-        val newest = steps[fadeFrame.coerceIn(0, steps.lastIndex)]
-        val depth = count - 1 - line
-        val factors = floatArrayOf(1f, 0.68f, 0.46f, 0.28f, 0.16f)
-        val factor = factors.getOrElse(depth) { 0.12f }
-        return newest * factor
+    fun wrapWords(text: String, maxChars: Int): List<String> {
+        if (text.isBlank()) return emptyList()
+        val limit = maxChars.coerceAtLeast(4)
+        val lines = mutableListOf<String>()
+        var current = ""
+        for (word in text.trim().split(Regex("\\s+"))) {
+            if (current.isEmpty()) {
+                current = word
+                continue
+            }
+            val candidate = "$current $word"
+            if (candidate.length > limit) {
+                lines += current
+                current = word
+            } else {
+                current = candidate
+            }
+        }
+        if (current.isNotEmpty()) lines += current
+        return lines
     }
 
-    fun shouldResetFade(previous: List<String>, next: List<String>): Boolean {
-        if (previous == next) return false
-        if (previous.size != next.size) return true
-        return previous.dropLast(1) != next.dropLast(1)
+    fun linesFor(phase: MicPhase, text: String, widgetWidthDp: Int): List<String> {
+        if (phase == MicPhase.IDLE || phase == MicPhase.DONE) return listOf(SAVED_NOTE_PROMPT)
+        return wrapWords(text, charsForWidth(widgetWidthDp))
     }
 
     fun colorWithAlpha(color: Int, alpha: Float): Int {
         val channel = (alpha.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
         return (color and 0x00FFFFFF) or (channel shl 24)
+    }
+
+    private fun fadeProgress(fadeFrame: Int): Float {
+        return fadeFrame.coerceIn(0, FADE_FRAMES) / FADE_FRAMES.toFloat()
+    }
+
+    private fun smoothstep(level: Float): Float {
+        val t = unit(level)
+        return t * t * (3f - 2f * t)
+    }
+
+    private fun unit(value: Float): Float {
+        if (value.isNaN() || value.isInfinite()) return 0f
+        return value.coerceIn(0f, 1f)
     }
 }
