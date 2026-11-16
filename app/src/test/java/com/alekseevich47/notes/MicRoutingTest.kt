@@ -2,7 +2,10 @@ package com.alekseevich47.notes
 
 import com.alekseevich47.notes.stt.LiveTranscriptRoute
 import com.alekseevich47.notes.stt.MicRouting
+import com.alekseevich47.notes.stt.ToneStartup
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MicRoutingTest {
@@ -14,5 +17,20 @@ class MicRoutingTest {
     @Test
     fun withoutToneTheFileWriterStartsFirst() {
         assertEquals(LiveTranscriptRoute.PLATFORM_AFTER_RECORD, MicRouting.route(toneReady = false))
+    }
+
+    @Test
+    fun missingOrDisabledToneDoesNotBlockTheMicrophone() {
+        assertEquals(ToneStartup.PARALLEL, MicRouting.toneStartup(installed = true, enabled = true))
+        assertEquals(ToneStartup.SKIP, MicRouting.toneStartup(installed = true, enabled = false))
+        assertEquals(ToneStartup.SKIP, MicRouting.toneStartup(installed = false, enabled = true))
+        assertEquals(ToneStartup.SKIP, MicRouting.toneStartup(installed = false, enabled = false))
+    }
+
+    @Test
+    fun disabledGigaKeepsTheLiveTranscript() {
+        assertTrue(MicRouting.useGiga(installed = true, enabled = true))
+        assertFalse(MicRouting.useGiga(installed = true, enabled = false))
+        assertFalse(MicRouting.useGiga(installed = false, enabled = true))
     }
 }

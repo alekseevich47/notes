@@ -7,14 +7,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -24,11 +29,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.alekseevich47.notes.BuildConfig
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.data.download.DownloadStatus
 import com.alekseevich47.notes.data.download.ModelCardState
@@ -47,6 +58,7 @@ fun SettingsScreen(
     val theme by viewModel.theme.collectAsState()
     val pin by viewModel.pinHash.collectAsState()
     val models by viewModel.models.collectAsState()
+    val modelEnabled by viewModel.modelEnabled.collectAsState()
     val context = LocalContext.current
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
@@ -70,18 +82,21 @@ fun SettingsScreen(
         Spacer(Modifier.height(22.dp))
         SectionLabel("Модели распознавания")
         Text(
-            "Без моделей работает системное распознавание ru-RU. T-one даёт текст во время записи, GigaAM оформляет финал.",
+            SettingsCopy.MODELS,
             fontFamily = NotesFont,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(10.dp))
         models.forEach { card ->
+            val enabled = modelEnabled[card.kind] != false
             ModelCard(
                 card = card,
+                enabled = enabled,
                 onDownload = { viewModel.startDownload(card.kind) },
                 onPause = { viewModel.pauseDownload(card.kind) },
                 onStop = { viewModel.stopDownload(card.kind) },
+                onToggle = { viewModel.setModelEnabled(card.kind, !enabled) },
                 onDelete = { viewModel.deleteModel(card.kind) },
             )
             Spacer(Modifier.height(10.dp))
@@ -89,7 +104,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(12.dp))
         SectionLabel("PIN")
         Text(
-            "Четыре цифры открывают скрытый текст. Сервисный сброс сравнивается только по хэшу.",
+            SettingsCopy.PIN,
             fontFamily = NotesFont,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
@@ -114,12 +129,36 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(22.dp))
         SectionLabel("Loomixx")
-        Text("Заметки 1.0.0", fontFamily = NotesFont, fontWeight = FontWeight.SemiBold)
-        LinkText("loomixx.dev@yandex.ru") {
-            context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:loomixx.dev@yandex.ru")))
+        Text(
+            SettingsCopy.versionLabel(BuildConfig.VERSION_NAME),
+            fontFamily = NotesFont,
+            fontWeight = FontWeight.SemiBold,
+        )
+        ContactLink(
+            icon = {
+                Icon(
+                    Icons.Outlined.Email,
+                    contentDescription = null,
+                    tint = NotesPurple,
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+            label = SettingsCopy.EMAIL,
+        ) {
+            context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${SettingsCopy.EMAIL}")))
         }
-        LinkText("Telegram") {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/aalekseevich47")))
+        ContactLink(
+            icon = {
+                Icon(
+                    TelegramPlane,
+                    contentDescription = null,
+                    tint = NotesPurple,
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+            label = SettingsCopy.TELEGRAM_HANDLE,
+        ) {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SettingsCopy.TELEGRAM_URL)))
         }
         Spacer(Modifier.height(22.dp))
         SectionLabel("Диагностика")
@@ -203,9 +242,11 @@ private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ModelCard(
     card: ModelCardState,
+    enabled: Boolean,
     onDownload: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
+    onToggle: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Column(
@@ -229,20 +270,23 @@ private fun ModelCard(
             Text(it, color = MaterialTheme.colorScheme.error, fontFamily = NotesFont, modifier = Modifier.padding(top = 4.dp))
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             when (card.status) {
-                DownloadStatus.NOT_INSTALLED, DownloadStatus.FAILED -> ActionText("Скачать", onDownload)
+                DownloadStatus.NOT_INSTALLED, DownloadStatus.FAILED -> RowAction("Скачать", onDownload)
                 DownloadStatus.DOWNLOADING -> {
-                    ActionText("Пауза", onPause)
-                    ActionText("Стоп", onStop)
+                    RowAction("Пауза", onPause)
+                    RowAction("Стоп", onStop)
                 }
                 DownloadStatus.PAUSED -> {
-                    ActionText("Продолжить", onDownload)
-                    ActionText("Стоп", onStop)
+                    RowAction("Продолжить", onDownload)
+                    RowAction("Стоп", onStop)
                 }
                 DownloadStatus.INSTALLED -> {
-                    Text("Установлено", fontFamily = NotesFont, color = NotesPurple, fontWeight = FontWeight.SemiBold)
-                    ActionText("Удалить", onDelete)
+                    RowAction(SettingsCopy.modelSwitchLabel(enabled), onToggle)
+                    RowAction("Удалить", onDelete)
                 }
             }
         }
@@ -261,11 +305,49 @@ private fun ActionText(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LinkText(label: String, onClick: () -> Unit) {
+private fun RowScope.RowAction(label: String, onClick: () -> Unit) {
     Text(
         label,
-        modifier = Modifier.clickable(onClick = onClick).padding(vertical = 6.dp),
+        modifier = Modifier
+            .alignByBaseline()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
         color = NotesPurple,
         fontFamily = NotesFont,
+        fontWeight = FontWeight.SemiBold,
     )
 }
+
+@Composable
+private fun ContactLink(
+    icon: @Composable () -> Unit,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        icon()
+        Text(label, color = NotesPurple, fontFamily = NotesFont)
+    }
+}
+
+private val TelegramPlane: ImageVector = ImageVector.Builder(
+    name = "TelegramPlane",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    addPath(
+        pathData = PathParser().parsePathString(
+            "M9.78,18.65l0.28,-4.23l7.68,-6.92c0.34,-0.31 -0.07,-0.46 -0.52,-0.19L7.74,13.3L3.64,12c-0.88,-0.25 -0.89,-0.86 0.2,-1.3l15.97,-6.16c0.73,-0.33 1.43,0.18 1.15,1.3l-2.72,12.81c-0.19,0.91 -0.74,1.13 -1.5,0.7L12.6,16.3l-1.99,1.93c-0.23,0.23 -0.42,0.42 -0.83,0.42z",
+        ).toNodes(),
+        fill = SolidColor(Color.Black),
+    )
+}.build()

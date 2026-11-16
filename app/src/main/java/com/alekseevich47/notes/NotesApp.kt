@@ -1,7 +1,6 @@
 package com.alekseevich47.notes
 
 import android.app.Application
-import android.os.Build
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -27,7 +26,7 @@ class NotesApp : Application(), Configuration.Provider {
         super.onCreate()
         AppLog.install(this)
         installCrashHandler()
-        AppLog.i("NotesApp", "onCreate sdk=${Build.VERSION.SDK_INT}")
+        AppLog.logProcessStart()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 AppLog.i("NotesApp", "process foreground")

@@ -20,6 +20,7 @@ class SettingsViewModel @Inject constructor(
     val theme: StateFlow<ThemeMode> = settings.themeMode
     val pinHash: StateFlow<String?> = settings.pinHash
     val models: StateFlow<List<ModelCardState>> = downloads.cards
+    val modelEnabled: StateFlow<Map<ModelKind, Boolean>> = settings.modelEnabled
 
     fun setTheme(mode: ThemeMode) {
         val previous = theme.value
@@ -30,7 +31,16 @@ class SettingsViewModel @Inject constructor(
     fun startDownload(kind: ModelKind) = downloads.start(kind)
     fun pauseDownload(kind: ModelKind) = downloads.pause(kind)
     fun stopDownload(kind: ModelKind) = downloads.stop(kind)
-    fun deleteModel(kind: ModelKind) = downloads.deleteInstalled(kind)
+
+    fun setModelEnabled(kind: ModelKind, enabled: Boolean) {
+        settings.setModelEnabled(kind, enabled)
+        AppLog.i(TAG, if (enabled) "model enable $kind" else "model disable $kind")
+    }
+
+    fun deleteModel(kind: ModelKind) {
+        downloads.deleteInstalled(kind)
+        settings.clearModelEnabled(kind)
+    }
 
     fun submitNewPin(first: String, second: String): PinChange {
         if (PinHasher.isServiceReset(first) || PinHasher.isServiceReset(second)) {

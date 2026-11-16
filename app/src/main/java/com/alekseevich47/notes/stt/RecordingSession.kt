@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.SystemClock
 import android.util.Log
 import com.alekseevich47.notes.data.audio.Pcm
 import com.alekseevich47.notes.data.audio.SoftBeep
@@ -12,6 +13,7 @@ import com.alekseevich47.notes.data.audio.WavWriter
 import com.alekseevich47.notes.data.download.ModelDownloadManager
 import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.repository.NotesRepository
+import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.log.AppLog
@@ -20,7 +22,10 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineStream
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +33,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,6 +49,7 @@ class RecordingSession @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: NotesRepository,
     private val models: ModelDownloadManager,
+    private val settings: SecureSettingsStore,
 ) {
     private val _phase = MutableStateFlow(MicPhase.IDLE)
     private val _level = MutableStateFlow(0f)
@@ -55,6 +65,9 @@ class RecordingSession @Inject constructor(
 
     private val stopRequested = AtomicBoolean(false)
     private var active: CompletableDeferred<Unit>? = null
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val engineGate = Mutex()
+    private var toneJob: Job? = null
 
     val isBusy: Boolean
         get() = _phase.value == MicPhase.RECORDING || _phase.value == MicPhase.PROCESSING
@@ -78,7 +91,10 @@ class RecordingSession @Inject constructor(
         _level.value = 0f
         var noteId: Long? = null
         var audioBase: String? = null
+        var startedAt = 0L
         try {
+            startedAt = SystemClock.elapsedRealtime()
+            AppLog.i(TAG, "start requested")
             _phase.value = MicPhase.RECORDING
             AppLog.i(TAG, "phase RECORDING")
             pushWidgets()
@@ -90,25 +106,7 @@ class RecordingSession @Inject constructor(
             }
             val file = File(recordingsDir, "note-${System.currentTimeMillis()}.wav")
             audioBase = file.name
-            // Soft beep after the target path is ready — never block mic open on STT init.
-            withContext(Dispatchers.Default) { SoftBeep.play() }
-            delay(80)
-            val toneInstalled = models.isInstalled(ModelKind.T_ONE)
-            // Load T-one AFTER we are ready to capture so a slow/failing model
-            // cannot prevent WAV creation. SpeechRecognizer only if T-one absent.
-            val online = if (toneInstalled) {
-                withContext(Dispatchers.Default) {
-                    runCatching { SherpaEngines.onlineTone(models.directory(ModelKind.T_ONE)) }
-                        .onFailure { Log.e(TAG, "T-one load crashed", it) }
-                        .getOrNull()
-                }
-            } else {
-                null
-            }
-            if (toneInstalled && online == null) {
-                _messages.tryEmit("Модель T-one не открылась. Запись идёт без неё.")
-            }
-            val platform = if (MicRouting.route(online != null) == LiveTranscriptRoute.PLATFORM_AFTER_RECORD) {
+            val openPlatform = {
                 PlatformTranscriber(
                     context = context,
                     onText = { value ->
@@ -117,14 +115,38 @@ class RecordingSession @Inject constructor(
                     },
                     onHardError = { message -> _messages.tryEmit(message) },
                 )
-            } else {
-                null
             }
+            var toneSlot: ModelLoadSlot<OnlineRecognizer>? = null
+            var toneLoad: Job? = null
+            var platform: PlatformTranscriber? = null
             val captured = try {
-                withContext(Dispatchers.IO) { capture(file, online, platform) }
+                // The WAV starts as soon as the beep has been kicked off. T-one
+                // loads beside that write and is attached only to later PCM.
+                val toneInstalled = models.isInstalled(ModelKind.T_ONE)
+                val toneEnabled = settings.isModelEnabled(ModelKind.T_ONE)
+                when (MicRouting.toneStartup(toneInstalled, toneEnabled)) {
+                    ToneStartup.PARALLEL -> {
+                        val slot = ModelLoadSlot<OnlineRecognizer>()
+                        toneSlot = slot
+                        toneLoad = loadTone(slot, startedAt)
+                    }
+                    ToneStartup.SKIP -> {
+                        val elapsed = elapsedSince(startedAt)
+                        val why = if (toneInstalled) "disabled" else "absent"
+                        AppLog.i(TAG, "model ready elapsedMs=$elapsed skipped=$why")
+                        if (toneInstalled && !toneEnabled) AppLog.i(TAG, "route=disabled kind=T_ONE")
+                        AppLog.i(TAG, "route=platform")
+                    }
+                }
+                SoftBeep.play()
+                delay(BEEP_GAP_MS)
+                if (toneSlot == null) platform = openPlatform()
+                withContext(Dispatchers.IO) {
+                    capture(file, startedAt, toneSlot, platform, openPlatform)
+                }
             } finally {
-                withContext(Dispatchers.Main) { platform?.stop() }
-                runCatching { online?.release() }
+                runCatching { platform?.stop() }
+                abandonTone(toneSlot, toneLoad)
             }
             _phase.value = MicPhase.PROCESSING
             AppLog.i(TAG, "phase PROCESSING bytes=${file.length()}")
@@ -136,7 +158,7 @@ class RecordingSession @Inject constructor(
             noteId = repository.create(document = document, audioPath = file.absolutePath)
             _noteId.value = noteId
             _phase.value = MicPhase.DONE
-            AppLog.i(TAG, "phase DONE bytes=${file.length()}")
+            AppLog.i(TAG, "phase DONE bytes=${file.length()} durationMs=${elapsedSince(startedAt)}")
             pushWidgets()
             delay(800)
             _phase.value = MicPhase.IDLE
@@ -145,10 +167,11 @@ class RecordingSession @Inject constructor(
             pushWidgets()
         } catch (error: Throwable) {
             Log.e(TAG, "recording failed", error)
+            val elapsed = elapsedSince(startedAt)
             if (error is kotlinx.coroutines.CancellationException) {
-                AppLog.i(TAG, "phase IDLE cancelled")
+                AppLog.i(TAG, "phase IDLE cancelled durationMs=$elapsed")
             } else {
-                AppLog.e(TAG, "phase IDLE recording failed file=${audioBase ?: "-"}", error)
+                AppLog.e(TAG, "phase IDLE recording failed file=${audioBase ?: "-"} durationMs=$elapsed", error)
             }
             _messages.tryEmit(error.message ?: "Не удалось записать заметку")
             _phase.value = MicPhase.IDLE
@@ -162,18 +185,69 @@ class RecordingSession @Inject constructor(
         return noteId
     }
 
+    private fun loadTone(slot: ModelLoadSlot<OnlineRecognizer>, startedAt: Long): Job {
+        toneJob?.cancel()
+        val job = background.launch {
+            val scope = this
+            var owned: OnlineRecognizer? = null
+            var reported = false
+            try {
+                engineGate.withLock {
+                    if (!scope.isActive) {
+                        AppLog.i(TAG, "model ready elapsedMs=${elapsedSince(startedAt)} discarded=1")
+                        reported = true
+                        return@withLock
+                    }
+                    owned = runCatching {
+                        SherpaEngines.onlineTone(models.directory(ModelKind.T_ONE))
+                    }.onFailure { error ->
+                        Log.e(TAG, "T-one load crashed", error)
+                        AppLog.e(TAG, "tone load failed", error)
+                    }.getOrNull()
+                    val elapsed = elapsedSince(startedAt)
+                    if (slot.publish(owned)) {
+                        AppLog.i(TAG, "model ready elapsedMs=$elapsed ok=${owned != null}")
+                        owned = null
+                    } else {
+                        AppLog.i(TAG, "model ready elapsedMs=$elapsed discarded=1")
+                    }
+                    reported = true
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                if (!reported) AppLog.i(TAG, "model ready elapsedMs=${elapsedSince(startedAt)} discarded=1")
+                throw error
+            } finally {
+                runCatching { owned?.release() }
+            }
+        }
+        toneJob = job
+        return job
+    }
+
+    private fun abandonTone(slot: ModelLoadSlot<OnlineRecognizer>?, job: Job?) {
+        val leftover = slot?.close()
+        runCatching { leftover?.release() }
+        job?.cancel()
+    }
+
     @SuppressLint("MissingPermission")
-    private fun capture(file: File, online: OnlineRecognizer?, platform: PlatformTranscriber?): String {
+    private fun capture(
+        file: File,
+        startedAt: Long,
+        tone: ModelLoadSlot<OnlineRecognizer>?,
+        platform: PlatformTranscriber?,
+        openPlatform: () -> PlatformTranscriber,
+    ): String {
         var mic = openMic()
+        AppLog.i(TAG, "mic opened elapsedMs=${elapsedSince(startedAt)} source=${mic.source}")
         val writer = WavWriter(file)
         var buffer = ByteArray(mic.bufferSize)
-        var tone = online
-        var stream = tone?.let { recognizer ->
-            runCatching { recognizer.createStream() }
-                .onFailure { Log.e(TAG, "T-one stream failed", it) }
-                .getOrNull()
-        }
-        if (stream == null) tone = null
+        var platformRef = platform
+        var toneRecognizer: OnlineRecognizer? = null
+        var stream: OnlineStream? = null
+        var toneSettled = tone == null
+        var toneAttached = false
+        var liveRoute = if (tone == null) "platform" else "tone"
         var committed = ""
         var smoothed = 0f
         var wrote = 0
@@ -181,6 +255,7 @@ class RecordingSession @Inject constructor(
         var reopens = 0
         var platformStarted = false
         var platformRetired = false
+        var heard = false
         try {
             while (!stopRequested.get()) {
                 val read = mic.record.read(buffer, 0, buffer.size)
@@ -192,60 +267,112 @@ class RecordingSession @Inject constructor(
                     if (platformStarted && !platformRetired) {
                         platformRetired = true
                         platformStarted = false
-                        platform?.stop()
+                        platformRef?.stop()
                         _messages.tryEmit(
                             "Микрофон отдан системному распознаванию. Аудио пишется дальше — для живого текста установите T-one.",
                         )
                     }
-                    if (reopens >= 2) break
+                    if (reopens >= 2) {
+                        AppLog.w(TAG, "mic stalled reopens=$reopens read=$read")
+                        break
+                    }
                     reopens++
                     val reopened = runCatching { reopen(mic) }
                     if (reopened.isFailure) {
-                        Log.e(TAG, "mic reopen failed", reopened.exceptionOrNull())
+                        val error = reopened.exceptionOrNull()
+                        Log.e(TAG, "mic reopen failed", error)
+                        AppLog.e(TAG, "mic reopen failed n=$reopens", error)
                         break
                     }
                     mic = reopened.getOrThrow()
                     buffer = ByteArray(mic.bufferSize)
+                    AppLog.w(TAG, "mic reopened n=$reopens source=${mic.source}")
                     continue
                 }
                 strikes = 0
                 writer.write(buffer, read)
                 wrote += read
+                if (!heard && read > 0) {
+                    heard = true
+                    AppLog.i(TAG, "first pcm elapsedMs=${elapsedSince(startedAt)}")
+                }
                 val floats = Pcm.toFloats(buffer, read)
                 smoothed = smoothed * 0.65f + Pcm.level(floats) * 0.35f
                 _level.value = smoothed
-                if (tone != null && stream != null) {
-                    val fed = feedTone(tone, stream, floats, finish = false, committed)
+                if (!toneSettled && tone != null) {
+                    when (val claim = tone.claim()) {
+                        ModelLoadSlot.Claim.Pending -> Unit
+                        is ModelLoadSlot.Claim.Taken -> {
+                            toneSettled = true
+                            val recognizer = claim.value
+                            val opened = recognizer?.let { ready ->
+                                runCatching { ready.createStream() }
+                                    .onFailure { error ->
+                                        Log.e(TAG, "T-one stream failed", error)
+                                        AppLog.e(TAG, "tone stream failed", error)
+                                    }
+                                    .getOrNull()
+                            }
+                            if (recognizer != null && opened != null) {
+                                toneRecognizer = recognizer
+                                stream = opened
+                                toneAttached = true
+                                liveRoute = "tone"
+                                AppLog.i(TAG, "route=tone elapsedMs=${elapsedSince(startedAt)}")
+                            } else {
+                                runCatching { recognizer?.release() }
+                                platformRef = openPlatform()
+                                liveRoute = "platform"
+                                AppLog.i(TAG, "route=platform elapsedMs=${elapsedSince(startedAt)}")
+                                _messages.tryEmit("Модель T-one не открылась. Запись идёт без неё.")
+                            }
+                        }
+                    }
+                }
+                val activeRecognizer = toneRecognizer
+                val activeStream = stream
+                if (activeRecognizer != null && activeStream != null) {
+                    val fed = feedTone(activeRecognizer, activeStream, floats, finish = false, committed)
                     committed = fed.committed
                     if (fed.failed) {
-                        runCatching { stream.release() }
+                        runCatching { activeStream.release() }
                         stream = null
-                        tone = null
+                        runCatching { activeRecognizer.release() }
+                        toneRecognizer = null
                     }
                 }
                 if (
-                    platform != null &&
+                    platformRef != null &&
                     !platformStarted &&
                     !platformRetired &&
                     wrote >= WARMUP_BYTES
                 ) {
-                    platform.start()
+                    platformRef?.start()
                     platformStarted = true
                 }
                 pushWidgets()
             }
-            if (tone != null && stream != null) {
-                val fed = feedTone(tone, stream, FloatArray(0), finish = true, committed)
+            val closingRecognizer = toneRecognizer
+            val closingStream = stream
+            if (closingRecognizer != null && closingStream != null) {
+                val fed = feedTone(closingRecognizer, closingStream, FloatArray(0), finish = true, committed)
                 committed = fed.committed
             }
         } finally {
-            if (platformStarted) platform?.stop()
+            runCatching { platformRef?.stop() }
             runCatching { mic.record.stop() }
             runCatching { mic.record.release() }
-            writer.close()
-            stream?.let { runCatching { it.release() } }
+            runCatching { writer.close() }
+            runCatching { stream?.release() }
+            runCatching { toneRecognizer?.release() }
+            val audioMs = wrote * 1000L / (SAMPLE_RATE * 2)
+            val attached = if (liveRoute == "tone") " attached=${if (toneAttached) 1 else 0}" else ""
+            AppLog.i(
+                TAG,
+                "capture bytes=$wrote durationMs=$audioMs elapsedMs=${elapsedSince(startedAt)} route=$liveRoute$attached",
+            )
         }
-        return if (online != null) LiveTranscript.prefer(committed, _text.value) else _text.value
+        return if (toneAttached) LiveTranscript.prefer(committed, _text.value) else _text.value
     }
 
     private data class ToneFeed(val committed: String, val failed: Boolean)
@@ -280,7 +407,10 @@ class RecordingSession @Inject constructor(
             _text.value = next.display
             published = true
             if (endpoint) recognizer.reset(stream)
-        }.onFailure { Log.e(TAG, "T-one decode stopped", it) }.isFailure
+        }.onFailure { error ->
+            Log.e(TAG, "T-one decode stopped", error)
+            AppLog.e(TAG, "tone decode stopped", error)
+        }.isFailure
         val committedOut = if (failed && !published) committed else next.committed
         return ToneFeed(committedOut, failed)
     }
@@ -321,9 +451,17 @@ class RecordingSession @Inject constructor(
                 failure = "Микрофон занят"
                 continue
             }
-            return OpenMic(recorder, bufferSize)
+            return OpenMic(recorder, bufferSize, sourceLabel(source))
         }
         error(failure)
+    }
+
+    private fun sourceLabel(source: Int): String {
+        return when (source) {
+            MediaRecorder.AudioSource.VOICE_RECOGNITION -> "voice"
+            MediaRecorder.AudioSource.MIC -> "mic"
+            else -> "source-$source"
+        }
     }
 
     private fun reopen(current: OpenMic): OpenMic {
@@ -332,30 +470,44 @@ class RecordingSession @Inject constructor(
         return openMic()
     }
 
-    private data class OpenMic(val record: AudioRecord, val bufferSize: Int)
+    private data class OpenMic(val record: AudioRecord, val bufferSize: Int, val source: String)
 
     private suspend fun finalize(file: File, live: String): String {
         val fallback = live.trim()
-        if (!models.isInstalled(ModelKind.GIGA_AM) || !file.exists() || file.length() < 44) {
+        val installed = models.isInstalled(ModelKind.GIGA_AM)
+        val enabled = settings.isModelEnabled(ModelKind.GIGA_AM)
+        if (installed && !enabled) AppLog.i(TAG, "route=disabled kind=GIGA_AM")
+        if (!MicRouting.useGiga(installed, enabled) || !file.exists() || file.length() < 44) {
             return fallback
         }
+        AppLog.i(TAG, "route=giga bytes=${file.length()}")
         val recognizer = try {
             withContext(Dispatchers.Default) {
-                SherpaEngines.offlineGiga(models.directory(ModelKind.GIGA_AM))
+                engineGate.withLock {
+                    SherpaEngines.offlineGiga(models.directory(ModelKind.GIGA_AM))
+                }
             }
         } catch (error: Throwable) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             Log.e(TAG, "GigaAM init crashed", error)
+            AppLog.e(TAG, "giga failed", error)
             null
-        } ?: return fallback
+        }
+        if (recognizer == null) {
+            AppLog.w(TAG, "giga failed")
+            return fallback
+        }
         return try {
             val text = withContext(Dispatchers.Default) {
-                SherpaEngines.transcribeFile(recognizer, file.absolutePath)
+                engineGate.withLock {
+                    SherpaEngines.transcribeFile(recognizer, file.absolutePath)
+                }
             }
             text.ifBlank { fallback }
         } catch (error: Throwable) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             Log.e(TAG, "GigaAM decode crashed", error)
+            AppLog.e(TAG, "giga failed", error)
             fallback
         } finally {
             runCatching { recognizer.release() }
@@ -365,16 +517,21 @@ class RecordingSession @Inject constructor(
     private var lastWidgetAt = 0L
 
     private fun pushWidgets() {
-        val now = android.os.SystemClock.elapsedRealtime()
+        val now = SystemClock.elapsedRealtime()
         val phase = _phase.value
         if (phase == MicPhase.RECORDING && now - lastWidgetAt < 120) return
         lastWidgetAt = now
         WidgetUpdater.push(context, phase, _level.value, _text.value)
     }
 
+    private fun elapsedSince(startedAt: Long): Long {
+        return if (startedAt == 0L) 0L else SystemClock.elapsedRealtime() - startedAt
+    }
+
     private companion object {
         const val TAG = "RecordingSession"
         const val SAMPLE_RATE = 16_000
         const val WARMUP_BYTES = SAMPLE_RATE / 10 * 2
+        const val BEEP_GAP_MS = 80L
     }
 }

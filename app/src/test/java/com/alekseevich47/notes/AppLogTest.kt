@@ -30,6 +30,40 @@ class AppLogTest {
     }
 
     @Test
+    fun processStartLinesKeepDeviceFactsAndDropNothingSensitive() {
+        val lines = AppLog.processStartLines(
+            manufacturer = "Google",
+            brand = "google",
+            model = "Pixel 7",
+            device = "panther",
+            release = "14",
+            sdk = 34,
+            incremental = "11234567",
+            display = "AP2A.240805.005",
+            abis = "arm64-v8a,armeabi-v7a",
+            locale = "ru-RU",
+            versionName = "1.0.4-debug",
+            versionCode = 5,
+        )
+        val text = lines.joinToString("\n")
+        assertTrue(text.contains("manufacturer=Google"))
+        assertTrue(text.contains("brand=google"))
+        assertTrue(text.contains("model=Pixel 7"))
+        assertTrue(text.contains("device=panther"))
+        assertTrue(text.contains("release=14"))
+        assertTrue(text.contains("sdk=34"))
+        assertTrue(text.contains("incremental=11234567"))
+        assertTrue(text.contains("display=AP2A.240805.005"))
+        assertTrue(text.contains("abis=arm64-v8a,armeabi-v7a"))
+        assertTrue(text.contains("locale=ru-RU"))
+        assertTrue(text.contains("versionName=1.0.4-debug"))
+        assertTrue(text.contains("versionCode=5"))
+        assertFalse(text.contains("http"))
+        assertFalse(text.contains("/"))
+        lines.forEach { line -> assertEquals(line, AppLog.sanitize(line)) }
+    }
+
+    @Test
     fun writesAppLogUnderTheConfiguredDirectory() {
         AppLog.i("Settings", "theme SYSTEM -> DARK")
         val file = AppLog.file()

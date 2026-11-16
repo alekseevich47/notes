@@ -16,6 +16,12 @@ enum class LiveTranscriptRoute {
     PLATFORM_AFTER_RECORD,
 }
 
+/** Whether T-one may be constructed. Missing and disabled models never block the mic. */
+enum class ToneStartup {
+    PARALLEL,
+    SKIP,
+}
+
 object MicRouting {
     fun route(toneReady: Boolean): LiveTranscriptRoute {
         return if (toneReady) {
@@ -24,4 +30,11 @@ object MicRouting {
             LiveTranscriptRoute.PLATFORM_AFTER_RECORD
         }
     }
+
+    fun toneStartup(installed: Boolean, enabled: Boolean): ToneStartup {
+        return if (installed && enabled) ToneStartup.PARALLEL else ToneStartup.SKIP
+    }
+
+    /** Disabled GigaAM keeps the live transcript. The files stay on disk. */
+    fun useGiga(installed: Boolean, enabled: Boolean): Boolean = installed && enabled
 }

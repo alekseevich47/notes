@@ -5,11 +5,14 @@ import android.content.ClipData
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.os.Build
 import androidx.core.content.FileProvider
+import com.alekseevich47.notes.BuildConfig
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -54,6 +57,46 @@ object AppLog {
     }
 
     fun file(): File? = lock.withLock { directory?.let { File(it, FILE_NAME) } }
+
+    /** Device and build facts at process start. No note text, paths, or audio. */
+    fun logProcessStart() {
+        processStartLines(
+            manufacturer = Build.MANUFACTURER,
+            brand = Build.BRAND,
+            model = Build.MODEL,
+            device = Build.DEVICE,
+            release = Build.VERSION.RELEASE,
+            sdk = Build.VERSION.SDK_INT,
+            incremental = Build.VERSION.INCREMENTAL,
+            display = Build.DISPLAY,
+            abis = Build.SUPPORTED_ABIS.joinToString(","),
+            locale = Locale.getDefault().toLanguageTag(),
+            versionName = BuildConfig.VERSION_NAME,
+            versionCode = BuildConfig.VERSION_CODE,
+        ).forEach { line -> i("NotesApp", line) }
+    }
+
+    internal fun processStartLines(
+        manufacturer: String,
+        brand: String,
+        model: String,
+        device: String,
+        release: String,
+        sdk: Int,
+        incremental: String,
+        display: String,
+        abis: String,
+        locale: String,
+        versionName: String,
+        versionCode: Int,
+    ): List<String> {
+        return listOf(
+            "onCreate manufacturer=$manufacturer brand=$brand model=$model device=$device",
+            "android release=$release sdk=$sdk incremental=$incremental",
+            "android display=$display",
+            "abis=$abis locale=$locale versionName=$versionName versionCode=$versionCode",
+        )
+    }
 
     fun i(tag: String, message: String) = write("I", tag, message, null)
 
