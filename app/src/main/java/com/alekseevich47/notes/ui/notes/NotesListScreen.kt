@@ -124,7 +124,7 @@ fun NotesListScreen(
             hazeState = hazeState,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 22.dp, bottom = 118.dp)
+                .padding(end = 22.dp, bottom = 134.dp)
                 .size(60.dp),
             shape = CircleShape,
             elevation = 10.dp,

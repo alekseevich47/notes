@@ -6,17 +6,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
-import androidx.compose.material.icons.outlined.FormatListNumbered
-import androidx.compose.material.icons.outlined.FormatStrikethrough
+import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.FormatUnderlined
-import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,7 +30,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.ui.theme.NotesPurple
@@ -56,16 +62,19 @@ fun EditorFormatBar(
     controller: NoteEditorController,
     modifier: Modifier = Modifier,
 ) {
-    val divider = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
+    val divider = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
     val plate = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
     ColumnBar(plate, divider, modifier) {
         FormatIcon(Icons.Outlined.FormatBold, "Жирный", MarkStyle.BOLD in controller.activeStyles, controller.bold)
+        BarDivider(divider)
         FormatIcon(Icons.Outlined.FormatItalic, "Курсив", MarkStyle.ITALIC in controller.activeStyles, controller.italic)
+        FormatIcon(FormatStrikeS, "Зачёркнутый", MarkStyle.STRIKE in controller.activeStyles, controller.strike)
         FormatIcon(Icons.Outlined.FormatUnderlined, "Подчёркнутый", MarkStyle.UNDERLINE in controller.activeStyles, controller.underline)
-        FormatIcon(Icons.Outlined.FormatStrikethrough, "Зачёркнутый", MarkStyle.STRIKE in controller.activeStyles, controller.strike)
         FormatIcon(Icons.Outlined.VisibilityOff, "Скрытый", MarkStyle.HIDDEN in controller.activeStyles, controller.hidden)
-        FormatIcon(Icons.Outlined.TableChart, "Таблица", active = false, onClick = controller.table)
-        FormatIcon(Icons.Outlined.FormatListNumbered, "Список", controller.listActive, controller.list)
+        BarDivider(divider)
+        FormatIcon(FormatTableGrid, "Таблица", active = false, onClick = controller.table)
+        BarDivider(divider)
+        FormatIcon(Icons.Outlined.FormatListBulleted, "Список", controller.listActive, controller.list)
     }
 }
 
@@ -79,12 +88,26 @@ private fun ColumnBar(
     Column(modifier.fillMaxWidth().background(plate)) {
         Box(Modifier.fillMaxWidth().height(0.6.dp).background(divider))
         Row(
-            modifier = Modifier.fillMaxWidth().height(44.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             content()
         }
     }
+}
+
+@Composable
+private fun BarDivider(color: Color) {
+    Box(
+        Modifier
+            .padding(vertical = 14.dp)
+            .width(1.dp)
+            .fillMaxHeight()
+            .background(color),
+    )
 }
 
 @Composable
@@ -94,20 +117,106 @@ private fun RowScope.FormatIcon(
     active: Boolean,
     onClick: () -> Unit,
 ) {
+    val well = if (active) NotesPurple else MaterialTheme.colorScheme.surfaceVariant
+    val glyph = if (active) Color.White else MaterialTheme.colorScheme.onSurface
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(36.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (active) NotesPurple.copy(alpha = 0.14f) else Color.Transparent)
+            .height(44.dp)
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            modifier = Modifier.size(21.dp),
-            tint = if (active) NotesPurple else MaterialTheme.colorScheme.onSurface,
-        )
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(if (active) RoundedCornerShape(9.dp) else CircleShape)
+                .background(well),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                modifier = Modifier.size(20.dp),
+                tint = glyph,
+            )
+        }
+    }
+}
+
+/** Letter S with a horizontal stroke through the middle. */
+private val FormatStrikeS: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "FormatStrikeS",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 1.8f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        ) {
+            moveTo(16.4f, 7.8f)
+            curveTo(16.4f, 5.15f, 14.25f, 3.9f, 11.8f, 3.9f)
+            curveTo(8.85f, 3.9f, 7.15f, 5.45f, 7.25f, 7.55f)
+            curveTo(7.35f, 9.55f, 9.15f, 10.45f, 12f, 12f)
+            curveTo(14.95f, 13.6f, 16.85f, 14.55f, 16.75f, 16.65f)
+            curveTo(16.65f, 18.85f, 14.35f, 20.15f, 11.8f, 20.15f)
+            curveTo(8.7f, 20.15f, 6.95f, 18.4f, 7.15f, 16.15f)
+        }
+        path(
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 1.8f,
+            strokeLineCap = StrokeCap.Round,
+        ) {
+            moveTo(4.4f, 12f)
+            lineTo(19.6f, 12f)
+        }
+    }.build()
+}
+
+/** Small 3×3 rounded grid. Each cell is its own rounded square. */
+private val FormatTableGrid: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "FormatTableGrid",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        val cell = 4.55f
+        val gap = 1.3f
+        val origin = (24f - (cell * 3f + gap * 2f)) / 2f
+        val radius = 1.05f
+        repeat(3) { row ->
+            repeat(3) { column ->
+                val x = origin + column * (cell + gap)
+                val y = origin + row * (cell + gap)
+                addRoundedCell(x, y, cell, radius)
+            }
+        }
+    }.build()
+}
+
+private fun ImageVector.Builder.addRoundedCell(x: Float, y: Float, size: Float, radius: Float) {
+    path(
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 1.45f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(x + radius, y)
+        lineTo(x + size - radius, y)
+        arcTo(radius, radius, 0f, false, true, x + size, y + radius)
+        lineTo(x + size, y + size - radius)
+        arcTo(radius, radius, 0f, false, true, x + size - radius, y + size)
+        lineTo(x + radius, y + size)
+        arcTo(radius, radius, 0f, false, true, x, y + size - radius)
+        lineTo(x, y + radius)
+        arcTo(radius, radius, 0f, false, true, x + radius, y)
+        close()
     }
 }
