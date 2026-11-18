@@ -2,11 +2,13 @@ package com.alekseevich47.notes.ui.player
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +34,7 @@ fun MiniPlayer(
     active: Boolean,
     onToggle: () -> Unit,
     onSeek: (Float) -> Unit,
+    onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (!active && state.noteId == null) return
@@ -54,6 +57,10 @@ fun MiniPlayer(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Outlined.Share, contentDescription = "Поделиться")
+                }
             }
             Slider(
                 value = if (dragging) drag else fraction,

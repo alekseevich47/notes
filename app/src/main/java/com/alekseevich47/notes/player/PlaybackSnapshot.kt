@@ -6,6 +6,8 @@ data class PlayerUi(
     val playing: Boolean = false,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
+    /** Media is loaded for this note. A preview of the open note is not engaged. */
+    val engaged: Boolean = false,
 )
 
 /**
@@ -22,6 +24,8 @@ object PlaybackSnapshot {
     /** Same sentinel as androidx.media3.common.C.TIME_UNSET. Non-positive reports are unknown. */
     const val TIME_UNSET: Long = Long.MIN_VALUE + 1
     const val TICK_MS: Long = 100L
+    /** Two deliveries of one notification tap, not a second press. */
+    const val TRANSPORT_ECHO_MS: Long = 200L
 
     fun knownDuration(reportedMs: Long): Long = if (reportedMs > 0L) reportedMs else 0L
 
@@ -79,8 +83,53 @@ object PlaybackSnapshot {
         return true
     }
 
-    fun opening(noteId: Long, title: String): PlayerUi {
-        return PlayerUi(noteId = noteId, title = title, playing = false, positionMs = 0L, durationMs = 0L)
+    fun opening(noteId: Long, title: String, durationMs: Long = 0L): PlayerUi {
+        return PlayerUi(
+            noteId = noteId,
+            title = title,
+            playing = false,
+            positionMs = 0L,
+            durationMs = durationMs.coerceAtLeast(0L),
+        )
+    }
+
+    /**
+     * The note already loaded in the player. Opening that same note must not
+     * reset position or the play/pause button.
+     */
+    fun keepLoadedSession(openNoteId: Long, sessionNoteId: Long?, engaged: Boolean): Boolean {
+        return engaged && sessionNoteId == openNoteId
+    }
+
+    /** The bar already describes this note at rest, so a second bind can leave it alone. */
+    fun alreadyDescribed(openNoteId: Long, sessionNoteId: Long?, engaged: Boolean, playing: Boolean): Boolean {
+        return !engaged && !playing && sessionNoteId == openNoteId
+    }
+
+    /**
+     * The in-app icon follows the player transport. A notification pause clears
+     * playWhenReady on the player without going through the app's own pause call.
+     * A replay seek still owns the command until play() lands, and so does the
+     * gap while a new item is being prepared.
+     */
+    fun playingCommand(
+        commandedPlaying: Boolean,
+        playWhenReady: Boolean,
+        replaying: Boolean,
+        armingPlay: Boolean = false,
+    ): Boolean {
+        if (replaying || armingPlay) return commandedPlaying
+        return playWhenReady
+    }
+
+    /**
+     * A media-session pause and the notification's ACTION_TOGGLE can both arrive
+     * for one tap. The second one shows up just after the transport already stopped.
+     */
+    fun echoedTransportPause(pausedAtMs: Long, nowMs: Long, windowMs: Long = TRANSPORT_ECHO_MS): Boolean {
+        if (pausedAtMs <= 0L) return false
+        val delta = nowMs - pausedAtMs
+        return delta in 0L..windowMs
     }
 
     fun sameItem(currentMediaId: String?, noteId: Long): Boolean {
