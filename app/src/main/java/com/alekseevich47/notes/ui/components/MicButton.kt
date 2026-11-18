@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -50,14 +51,29 @@ import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import com.alekseevich47.notes.ui.theme.NotesPurpleDeep
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
-private val RecordingColors = listOf(
-    Color(0xFF6C4CFF),
-    Color(0xFFFF5EAB),
-    Color(0xFF3E7BFF),
-    Color(0xFFC44CFF),
-    Color(0xFF6C4CFF),
+/**
+ * Violet, pink, and blue walked in small steps so the capsule reads as one
+ * blend. The first and last stops match, which keeps the slow scroll seamless.
+ */
+private val RecordingColors = blendStops(
+    listOf(
+        Color(0xFF8B74FF),
+        Color(0xFFA07CFF),
+        Color(0xFFC48CF0),
+        Color(0xFFE09AD4),
+        Color(0xFFF0A0CC),
+        Color(0xFFE4A8E4),
+        Color(0xFFC8B4FF),
+        Color(0xFFA8B8FF),
+        Color(0xFF88A8FF),
+        Color(0xFF908CFF),
+        Color(0xFF8B74FF),
+    ),
+    stepsBetween = 3,
 )
 
 @Composable
@@ -78,7 +94,7 @@ fun MicButton(
     val colorShift by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(3200, easing = LinearEasing), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(8400, easing = LinearEasing), RepeatMode.Restart),
         label = "colors",
     )
     val bounce by transition.animateFloat(
@@ -137,7 +153,7 @@ fun MicButton(
                     }
                     MicPhase.RECORDING -> {
                         clipPath(glyph.inner) {
-                            drawRecordingFill(glyph.body, easedLevel, colorShift)
+                            drawRecordingFill(glyph.body, easedLevel, colorShift, wave)
                         }
                         drawOutlineMic(glyph, ink)
                     }
@@ -192,7 +208,7 @@ private fun outlineMic(size: Size): OutlineMic {
     val cx = size.width / 2f
     // Centerlines traced from the reference outline: hollow capsule, U cradle,
     // short stem, and a base as wide as the head. Stroke sits on these paths.
-    val stroke = s * 0.065f
+    val stroke = s * 0.065f * (2f / 3f)
     val half = s * 0.138f
     val top = s * 0.113f
     val bottom = s * 0.612f
@@ -252,20 +268,12 @@ private fun DrawScope.drawOutlineMic(glyph: OutlineMic, color: Color) {
 }
 
 private fun DrawScope.drawIdleWave(body: Rect, turns: Float) {
-    val amp = body.height * 0.23f
-    val base = body.bottom - body.height * 0.42f
-    val path = Path()
-    path.moveTo(body.left, body.bottom)
-    var x = body.left
-    while (x <= body.right) {
-        path.lineTo(x, waveY(x, body, base, amp, turns))
-        x += 1.1f
-    }
-    path.lineTo(body.right, waveY(body.right, body, base, amp, turns))
-    path.lineTo(body.right, body.bottom)
-    path.close()
+    val height = body.height.coerceAtLeast(1f)
+    // One broad hump across the head, not a steep crest and trough.
+    val amp = height * 0.09f
+    val base = body.bottom - height * 0.34f
     drawPath(
-        path,
+        wavePath(body, base, amp, turns, cycles = 0.5f),
         brush = Brush.verticalGradient(
             colors = listOf(
                 NotesPurple.copy(alpha = 0.22f),
@@ -279,29 +287,80 @@ private fun DrawScope.drawIdleWave(body: Rect, turns: Float) {
 }
 
 /**
- * One cycle of a traveling sine. `turns` is 0..1 and wraps with sin(2π t),
- * so the shape at the end of the loop matches the start.
+ * Traveling sine under the capsule, drawn as cubics that follow the slope so
+ * crests stay round. `cycles` is a whole or half turn across the width.
+ * `turns` is 0..1 and sin(2π t) matches at both ends, so the loop has no seam.
  */
-private fun waveY(x: Float, body: Rect, base: Float, amplitude: Float, turns: Float): Float {
+private fun wavePath(body: Rect, base: Float, amplitude: Float, turns: Float, cycles: Float): Path {
     val width = body.width.coerceAtLeast(1f)
-    val u = (x - body.left) / width
-    val cycles = 1f
+    val segments = 12
+    val path = Path()
+    path.moveTo(body.left, body.bottom)
+    path.lineTo(body.left, waveSample(0f, base, amplitude, turns, cycles))
+    for (index in 0 until segments) {
+        val u0 = index / segments.toFloat()
+        val u1 = (index + 1) / segments.toFloat()
+        val x0 = body.left + width * u0
+        val x1 = body.left + width * u1
+        val y0 = waveSample(u0, base, amplitude, turns, cycles)
+        val y1 = waveSample(u1, base, amplitude, turns, cycles)
+        val dx = (x1 - x0) / 3f
+        path.cubicTo(
+            x0 + dx,
+            y0 + waveSlope(u0, amplitude, turns, cycles) / width * dx,
+            x1 - dx,
+            y1 - waveSlope(u1, amplitude, turns, cycles) / width * dx,
+            x1,
+            y1,
+        )
+    }
+    path.lineTo(body.right, body.bottom)
+    path.close()
+    return path
+}
+
+private fun waveSample(u: Float, base: Float, amplitude: Float, turns: Float, cycles: Float): Float {
     return base + sin((u * cycles + turns) * (2.0 * PI)).toFloat() * amplitude
 }
 
-private fun DrawScope.drawRecordingFill(body: Rect, level: Float, shift: Float) {
-    val fill = 0.20f + level.coerceIn(0f, 1f) * 0.80f
-    val top = body.bottom - body.height * fill
-    val period = (body.height * 0.72f).coerceAtLeast(1f)
+private fun waveSlope(u: Float, amplitude: Float, turns: Float, cycles: Float): Float {
+    return (cos((u * cycles + turns) * (2.0 * PI)) * (2.0 * PI) * cycles * amplitude).toFloat()
+}
+
+private fun DrawScope.drawRecordingFill(body: Rect, level: Float, shift: Float, turns: Float) {
+    val height = body.height.coerceAtLeast(1f)
+    val amp = height * 0.055f
+    val room = amp / height + 0.012f
+    val fill = loudFill(level).coerceAtMost(1f - room)
+    val base = body.bottom - height * fill
+    val period = height * 1.3f
     val startY = body.top - shift * period
-    drawRect(
+    drawPath(
+        wavePath(body, base, amp, turns, cycles = 1f),
         brush = Brush.verticalGradient(
             colors = RecordingColors,
             startY = startY,
             endY = startY + period,
             tileMode = TileMode.Repeated,
         ),
-        topLeft = Offset(body.left, top),
-        size = Size(body.width, (body.bottom - top).coerceAtLeast(0f)),
     )
+}
+
+/** Loud speech fills most of the head; silence stays a low band. */
+private fun loudFill(level: Float): Float {
+    val gained = (level.coerceIn(0f, 1f) * 1.85f).coerceAtMost(1f)
+    return 0.14f + sqrt(gained) * 0.84f
+}
+
+private fun blendStops(anchors: List<Color>, stepsBetween: Int): List<Color> {
+    val stops = ArrayList<Color>(1 + (anchors.size - 1) * stepsBetween)
+    for (index in 0 until anchors.lastIndex) {
+        val from = anchors[index]
+        val to = anchors[index + 1]
+        for (step in 0 until stepsBetween) {
+            stops += lerp(from, to, step / stepsBetween.toFloat())
+        }
+    }
+    stops += anchors.last()
+    return stops
 }
