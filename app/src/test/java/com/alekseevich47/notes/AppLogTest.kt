@@ -64,6 +64,88 @@ class AppLogTest {
     }
 
     @Test
+    fun processStartHeaderIsRewrittenAtTheTop() {
+        AppLog.i("T", "older line")
+        AppLog.rewriteHeader(
+            AppLog.processStartLines(
+                manufacturer = "Google",
+                brand = "google",
+                model = "Pixel 7",
+                device = "panther",
+                release = "14",
+                sdk = 34,
+                incremental = "11234567",
+                display = "AP2A.240805.005",
+                abis = "arm64-v8a,armeabi-v7a",
+                locale = "ru-RU",
+                versionName = "1.0.4-debug",
+                versionCode = 5,
+            ),
+        )
+        AppLog.i("T", "newer line")
+        val first = File(dir, "app.log").readText()
+        assertTrue(first.startsWith("===== notes log header ====="))
+        assertTrue(first.indexOf("brand=google") < first.indexOf("older line"))
+        assertTrue(first.indexOf("older line") < first.indexOf("newer line"))
+        assertTrue(first.contains("manufacturer=Google"))
+        assertTrue(first.contains("model=Pixel 7"))
+        assertTrue(first.contains("release=14"))
+        assertTrue(first.contains("sdk=34"))
+        assertTrue(first.contains("display=AP2A.240805.005"))
+        assertTrue(first.contains("abis=arm64-v8a,armeabi-v7a"))
+        assertTrue(first.contains("locale=ru-RU"))
+        assertTrue(first.contains("versionCode=5"))
+
+        AppLog.rewriteHeader(
+            AppLog.processStartLines(
+                manufacturer = "Google",
+                brand = "google",
+                model = "Pixel 7",
+                device = "panther",
+                release = "14",
+                sdk = 34,
+                incremental = "11234567",
+                display = "AP2A.240805.005",
+                abis = "arm64-v8a,armeabi-v7a",
+                locale = "ru-RU",
+                versionName = "1.0.5-debug",
+                versionCode = 6,
+            ),
+        )
+        val again = File(dir, "app.log").readText()
+        assertTrue(again.startsWith("===== notes log header ====="))
+        assertEquals(1, Regex("notes log header").findAll(again).count())
+        assertTrue(again.contains("versionName=1.0.5-debug"))
+        assertTrue(again.contains("versionCode=6"))
+        assertFalse(again.contains("versionCode=5"))
+        assertTrue(again.indexOf("versionCode=6") < again.indexOf("older line"))
+        assertTrue(again.contains("older line"))
+        assertTrue(again.contains("newer line"))
+        assertFalse(again.contains("http"))
+        assertFalse(again.contains(".wav"))
+    }
+
+    @Test
+    fun headerStaysAtTheTopAfterRotation() {
+        AppLog.install(dir, maxBytes = 800, logcat = false)
+        AppLog.rewriteHeader(
+            listOf(
+                "manufacturer=Google brand=google model=Pixel",
+                "android release=14 sdk=34",
+                "android display=AP2A",
+                "abis=arm64-v8a locale=ru-RU versionName=1.0.5 versionCode=6",
+            ),
+        )
+        repeat(30) { index -> AppLog.i("T", "line-$index " + "x".repeat(40)) }
+        val text = File(dir, "app.log").readText()
+        assertTrue(text.startsWith("===== notes log header ====="))
+        assertTrue(text.contains("rotated"))
+        assertTrue(text.indexOf("manufacturer=Google") < text.indexOf("rotated"))
+        assertTrue(text.contains("versionName=1.0.5"))
+        assertTrue(text.contains("versionCode=6"))
+    }
+
+    @Test
     fun writesAppLogUnderTheConfiguredDirectory() {
         AppLog.i("Settings", "theme SYSTEM -> DARK")
         val file = AppLog.file()

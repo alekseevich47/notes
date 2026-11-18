@@ -17,13 +17,24 @@ import javax.inject.Singleton
 class SecureSettingsStore @Inject constructor(
     @ApplicationContext context: Context,
 ) {
+    private val appContext = context.applicationContext
     private val prefs: SharedPreferences = open(context)
     private val _pinHash = MutableStateFlow(prefs.getString(KEY_PIN, null))
     private val _theme = MutableStateFlow(readTheme())
     private val _modelEnabled = MutableStateFlow(readModelFlags())
+    private val _warmupOnBoot = MutableStateFlow(prefs.getBoolean(NotesPrefs.WARMUP_ON_BOOT, false))
+    private val _recognizer = MutableStateFlow(
+        NotesPrefs.recognizerOf(prefs.getString(NotesPrefs.RECOGNIZER, null)),
+    )
 
     val pinHash: StateFlow<String?> = _pinHash.asStateFlow()
     val themeMode: StateFlow<ThemeMode> = _theme.asStateFlow()
+    val warmupOnBoot: StateFlow<Boolean> = _warmupOnBoot.asStateFlow()
+    val recognizer: StateFlow<String> = _recognizer.asStateFlow()
+
+    init {
+        mirrorWidgetPrefs()
+    }
 
     /** Explicit switches only. A missing entry means the installed model is on. */
     val modelEnabled: StateFlow<Map<ModelKind, Boolean>> = _modelEnabled.asStateFlow()
@@ -50,6 +61,27 @@ class SecureSettingsStore @Inject constructor(
     fun setTheme(mode: ThemeMode) {
         prefs.edit().putString(KEY_THEME, mode.name).apply()
         _theme.value = mode
+    }
+
+    fun setWarmupOnBoot(enabled: Boolean) {
+        prefs.edit().putBoolean(NotesPrefs.WARMUP_ON_BOOT, enabled).commit()
+        _warmupOnBoot.value = enabled
+        mirrorWidgetPrefs()
+    }
+
+    fun setRecognizer(value: String) {
+        val stored = NotesPrefs.recognizerOf(value)
+        prefs.edit().putString(NotesPrefs.RECOGNIZER, stored).commit()
+        _recognizer.value = stored
+        mirrorWidgetPrefs()
+    }
+
+    private fun mirrorWidgetPrefs() {
+        NotesPrefs.open(appContext)
+            .edit()
+            .putBoolean(NotesPrefs.WARMUP_ON_BOOT, _warmupOnBoot.value)
+            .putString(NotesPrefs.RECOGNIZER, _recognizer.value)
+            .commit()
     }
 
     private fun readTheme(): ThemeMode {

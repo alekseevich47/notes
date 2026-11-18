@@ -11,6 +11,14 @@ object SettingsCopy {
     const val TELEGRAM_HANDLE = "@alekseevich47"
     const val TELEGRAM_URL = "https://t.me/alekseevich47"
 
+    const val WARMUP_TITLE = "Автозагрузка моделей"
+    const val WARMUP_SUBTITLE =
+        "На Tecno, Xiaomi и Samsung также нужны системный автозапуск и работа без ограничений батареи. Модели загружаются только после разблокировки экрана."
+
+    const val RECOGNIZER_TITLE = "Распознавание"
+    const val RECOGNIZER_TONE = "T-one"
+    const val RECOGNIZER_SYSTEM = "Системное"
+
     fun versionLabel(versionName: String): String {
         return "Заметки " + versionName.removeSuffix("-debug")
     }

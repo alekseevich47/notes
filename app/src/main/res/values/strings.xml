@@ -12,6 +12,8 @@
     <string name="channel_ready_desc">Сообщает, что запись сохранена, и открывает заметку.</string>
     <string name="channel_playback">Воспроизведение</string>
     <string name="channel_playback_desc">Управление воспроизведением аудиозаметки.</string>
+    <string name="channel_warmup">Готовность к записи</string>
+    <string name="channel_warmup_desc">Показывает, что модели распознавания держатся в памяти и запись может начаться сразу.</string>
     <string name="permission_mic_title">Доступ для записи</string>
     <string name="permission_mic_rationale">Микрофон нужен, чтобы сохранить голосовую заметку и распознать речь на устройстве. Уведомление показывает, что запись идёт, и открывает готовую заметку. Микрофон работает только пока вы записываете.</string>
     <string name="permission_continue">Продолжить</string>

@@ -22,6 +22,8 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -43,6 +45,7 @@ import com.alekseevich47.notes.BuildConfig
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.data.download.DownloadStatus
 import com.alekseevich47.notes.data.download.ModelCardState
+import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.domain.ThemeMode
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.components.PinDialog
@@ -59,6 +62,8 @@ fun SettingsScreen(
     val pin by viewModel.pinHash.collectAsState()
     val models by viewModel.models.collectAsState()
     val modelEnabled by viewModel.modelEnabled.collectAsState()
+    val warmup by viewModel.warmupOnBoot.collectAsState()
+    val recognizer by viewModel.recognizer.collectAsState()
     val context = LocalContext.current
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
@@ -78,6 +83,39 @@ fun SettingsScreen(
             ThemeChip("Как в системе", theme == ThemeMode.SYSTEM) { viewModel.setTheme(ThemeMode.SYSTEM) }
             ThemeChip("Светлая", theme == ThemeMode.LIGHT) { viewModel.setTheme(ThemeMode.LIGHT) }
             ThemeChip("Тёмная", theme == ThemeMode.DARK) { viewModel.setTheme(ThemeMode.DARK) }
+        }
+        Spacer(Modifier.height(22.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                SettingsCopy.WARMUP_TITLE,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = NotesFont,
+            )
+            Switch(
+                checked = warmup,
+                onCheckedChange = viewModel::setWarmupOnBoot,
+                colors = SwitchDefaults.colors(checkedTrackColor = NotesPurple),
+            )
+        }
+        Text(
+            SettingsCopy.WARMUP_SUBTITLE,
+            fontFamily = NotesFont,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Spacer(Modifier.height(22.dp))
+        SectionLabel(SettingsCopy.RECOGNIZER_TITLE)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemeChip(SettingsCopy.RECOGNIZER_TONE, recognizer == NotesPrefs.RECOGNIZER_TONE) {
+                viewModel.setRecognizer(NotesPrefs.RECOGNIZER_TONE)
+            }
+            ThemeChip(SettingsCopy.RECOGNIZER_SYSTEM, recognizer == NotesPrefs.RECOGNIZER_SYSTEM) {
+                viewModel.setRecognizer(NotesPrefs.RECOGNIZER_SYSTEM)
+            }
         }
         Spacer(Modifier.height(22.dp))
         SectionLabel("Модели распознавания")

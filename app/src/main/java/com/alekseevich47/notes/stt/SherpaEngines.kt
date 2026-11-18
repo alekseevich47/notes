@@ -12,6 +12,12 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineToneCtcModelConfig
 import com.k2fsa.sherpa.onnx.WaveReader
 import java.io.File
+import kotlin.math.min
+
+/** Shared by T-one and GigaAM. At least two threads, never more than four. */
+internal fun sherpaNumThreads(processors: Int = Runtime.getRuntime().availableProcessors()): Int {
+    return min(4, processors.coerceAtLeast(2))
+}
 
 object SherpaEngines {
     private const val TAG = "SherpaEngines"
@@ -25,7 +31,7 @@ object SherpaEngines {
             modelConfig = OnlineModelConfig(
                 toneCtc = OnlineToneCtcModelConfig(model = model.absolutePath),
                 tokens = tokens.absolutePath,
-                numThreads = 2,
+                numThreads = sherpaNumThreads(),
                 debug = false,
                 provider = "cpu",
             ),
@@ -50,7 +56,7 @@ object SherpaEngines {
                     joiner = joiner.absolutePath,
                 ),
                 tokens = tokens.absolutePath,
-                numThreads = 2,
+                numThreads = sherpaNumThreads(),
                 debug = false,
                 provider = "cpu",
                 modelType = "nemo_transducer",
