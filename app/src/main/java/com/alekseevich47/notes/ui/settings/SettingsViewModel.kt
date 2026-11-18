@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.ui.settings
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.alekseevich47.notes.data.download.ModelCardState
 import com.alekseevich47.notes.data.download.ModelDownloadManager
@@ -8,12 +9,15 @@ import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.ThemeMode
 import com.alekseevich47.notes.log.AppLog
+import com.alekseevich47.notes.service.ModelWarmupService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val settings: SecureSettingsStore,
     private val downloads: ModelDownloadManager,
 ) : ViewModel() {
@@ -21,11 +25,24 @@ class SettingsViewModel @Inject constructor(
     val pinHash: StateFlow<String?> = settings.pinHash
     val models: StateFlow<List<ModelCardState>> = downloads.cards
     val modelEnabled: StateFlow<Map<ModelKind, Boolean>> = settings.modelEnabled
+    val warmupOnBoot: StateFlow<Boolean> = settings.warmupOnBoot
+    val recognizer: StateFlow<String> = settings.recognizer
 
     fun setTheme(mode: ThemeMode) {
         val previous = theme.value
         settings.setTheme(mode)
         AppLog.i(TAG, "theme $previous -> $mode")
+    }
+
+    fun setWarmupOnBoot(enabled: Boolean) {
+        settings.setWarmupOnBoot(enabled)
+        AppLog.i(TAG, if (enabled) "warmup on" else "warmup off")
+        if (enabled) ModelWarmupService.start(context) else ModelWarmupService.stop(context)
+    }
+
+    fun setRecognizer(value: String) {
+        settings.setRecognizer(value)
+        AppLog.i(TAG, "recognizer ${settings.recognizer.value}")
     }
 
     fun startDownload(kind: ModelKind) = downloads.start(kind)

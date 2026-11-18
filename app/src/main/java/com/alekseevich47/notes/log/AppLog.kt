@@ -22,6 +22,10 @@ import kotlin.concurrent.withLock
  * The file rotates once it reaches [MAX_BYTES] (1.5 MB, inside the 1–2 MB window)
  * by dropping the oldest lines and keeping the newest half.
  *
+ * Each process start rewrites a device header at the top of the file. Later
+ * lines are appended under it, and rotation keeps that header in place so it
+ * is not buried after older lines.
+ *
  * Never pass note titles, note bodies, transcripts, PIN digits, or audio bytes.
  * An audio filename (basename only) is acceptable on error lines; absolute paths
  * are reduced to that basename before they are written.
@@ -38,10 +42,13 @@ object AppLog {
     private val ABS_PATH = Regex("""(?:[A-Za-z]:)?(?:/[\w.\-]+)+""")
     private val PIN_DIGITS = Regex("""(?i)(\bpin\b[^0-9]{0,16})(\d{4,8})\b""")
     private val lock = ReentrantLock()
+    private val headerBegin = "===== notes log header =====\n".toByteArray(Charsets.UTF_8)
+    private val headerEnd = "===== end header =====\n".toByteArray(Charsets.UTF_8)
 
     private var directory: File? = null
     private var maxBytes: Long = MAX_BYTES
     private var logcat: Boolean = true
+    private var headerBlock: String = ""
 
     fun install(context: Context) {
         install(File(context.applicationContext.filesDir, DIR_NAME))
@@ -53,6 +60,7 @@ object AppLog {
             this.directory = directory
             this.maxBytes = maxBytes.coerceIn(64L, 2_000_000L)
             this.logcat = logcat
+            this.headerBlock = ""
         }
     }
 
@@ -60,7 +68,7 @@ object AppLog {
 
     /** Device and build facts at process start. No note text, paths, or audio. */
     fun logProcessStart() {
-        processStartLines(
+        val lines = processStartLines(
             manufacturer = Build.MANUFACTURER,
             brand = Build.BRAND,
             model = Build.MODEL,
@@ -73,7 +81,39 @@ object AppLog {
             locale = Locale.getDefault().toLanguageTag(),
             versionName = BuildConfig.VERSION_NAME,
             versionCode = BuildConfig.VERSION_CODE,
-        ).forEach { line -> i("NotesApp", line) }
+        )
+        rewriteHeader(lines)
+        if (lock.withLock { logcat }) {
+            lines.forEach { line -> mirrorLogcat("I", "NotesApp", sanitize(line)) }
+        }
+    }
+
+    /**
+     * Replace the header at the top of the log file. Body lines that were
+     * already written stay after the new header. A previous header is removed
+     * so process starts do not stack.
+     */
+    internal fun rewriteHeader(lines: List<String>) {
+        val block = buildString {
+            append("===== notes log header =====\n")
+            lines.forEach { line ->
+                append(sanitize(line))
+                append('\n')
+            }
+            append("===== end header =====\n")
+        }
+        lock.withLock {
+            headerBlock = block
+            val dir = directory ?: return@withLock
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, FILE_NAME)
+            val existing = if (file.isFile) file.readBytes() else ByteArray(0)
+            val body = stripHeader(existing)
+            FileOutputStream(file, false).use { output ->
+                output.write(block.toByteArray(Charsets.UTF_8))
+                output.write(body)
+            }
+        }
     }
 
     internal fun processStartLines(
@@ -185,16 +225,52 @@ object AppLog {
     }
 
     private fun rotate(file: File) {
-        val bytes = if (file.isFile) file.readBytes() else ByteArray(0)
+        val raw = if (file.isFile) file.readBytes() else ByteArray(0)
+        val bytes = stripHeader(raw)
         val keepFrom = (bytes.size - (maxBytes / 2).toInt()).coerceAtLeast(0)
         var cut = keepFrom
         while (cut < bytes.size && bytes[cut] != '\n'.code.toByte()) cut++
         if (cut < bytes.size) cut++ else cut = bytes.size
         val marker = "----- rotated, older lines dropped -----\n".toByteArray(Charsets.UTF_8)
+        val header = headerBlock.toByteArray(Charsets.UTF_8)
         FileOutputStream(file, false).use { output ->
+            if (header.isNotEmpty()) output.write(header)
             output.write(marker)
             if (cut < bytes.size) output.write(bytes, cut, bytes.size - cut)
         }
+    }
+
+    private fun stripHeader(bytes: ByteArray): ByteArray {
+        if (bytes.size < headerBegin.size || !bytes.startsWith(headerBegin)) return bytes
+        val end = bytes.indexOfSlice(headerEnd)
+        if (end < 0) return ByteArray(0)
+        val from = end + headerEnd.size
+        if (from >= bytes.size) return ByteArray(0)
+        return bytes.copyOfRange(from, bytes.size)
+    }
+
+    private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
+        if (size < prefix.size) return false
+        for (index in prefix.indices) {
+            if (this[index] != prefix[index]) return false
+        }
+        return true
+    }
+
+    private fun ByteArray.indexOfSlice(needle: ByteArray): Int {
+        if (needle.isEmpty() || size < needle.size) return -1
+        val last = size - needle.size
+        for (start in 0..last) {
+            var match = true
+            for (index in needle.indices) {
+                if (this[start + index] != needle[index]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return start
+        }
+        return -1
     }
 
     private fun renderError(error: Throwable): String {

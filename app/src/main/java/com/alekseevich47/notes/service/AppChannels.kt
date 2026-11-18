@@ -14,6 +14,7 @@ object AppChannels {
     const val RECORDING = "notes_recording"
     const val READY = "notes_ready"
     const val PLAYBACK = "notes_playback"
+    const val WARMUP = "notes_warmup"
 
     fun ensure(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -47,6 +48,18 @@ object AppChannels {
             ).apply {
                 description = context.getString(R.string.channel_playback_desc)
                 setShowBadge(false)
+            },
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                WARMUP,
+                context.getString(R.string.channel_warmup),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = context.getString(R.string.channel_warmup_desc)
+                setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
             },
         )
     }

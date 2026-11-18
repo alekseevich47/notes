@@ -1,7 +1,9 @@
 package com.alekseevich47.notes
 
+import com.alekseevich47.notes.service.WarmupNotice
 import com.alekseevich47.notes.ui.settings.SettingsCopy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsCopyTest {
@@ -26,8 +28,24 @@ class SettingsCopyTest {
 
     @Test
     fun versionLabelStripsTheDebugSuffix() {
-        assertEquals("Заметки 1.0.4", SettingsCopy.versionLabel("1.0.4-debug"))
-        assertEquals("Заметки 1.0.4", SettingsCopy.versionLabel("1.0.4"))
+        assertEquals("Заметки 1.0.5", SettingsCopy.versionLabel("1.0.5-debug"))
+        assertEquals("Заметки 1.0.5", SettingsCopy.versionLabel("1.0.5"))
+    }
+
+    @Test
+    fun warmupCopyNamesOemAutostartBatteryAndUnlock() {
+        assertEquals("Автозагрузка моделей", SettingsCopy.WARMUP_TITLE)
+        val subtitle = SettingsCopy.WARMUP_SUBTITLE
+        assertTrue(subtitle.contains("Tecno"))
+        assertTrue(subtitle.contains("Xiaomi"))
+        assertTrue(subtitle.contains("Samsung"))
+        assertTrue(subtitle.contains("автозапуск"))
+        assertTrue(subtitle.contains("батаре"))
+        assertTrue(subtitle.contains("разблокир"))
+        assertEquals("Распознавание", SettingsCopy.RECOGNIZER_TITLE)
+        assertEquals("T-one", SettingsCopy.RECOGNIZER_TONE)
+        assertEquals("Системное", SettingsCopy.RECOGNIZER_SYSTEM)
+        assertEquals("Заметки готовы к записи", WarmupNotice.TEXT)
     }
 
     @Test
