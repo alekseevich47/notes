@@ -1,6 +1,5 @@
 package com.alekseevich47.notes.service
 
-import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -169,17 +168,7 @@ class PlaybackService : Service() {
 
     private fun action(action: String, code: Int): PendingIntent {
         val intent = Intent(this, PlaybackService::class.java).setAction(action)
-        val flags = pendingFlags()
-        // A notification tap may start this service in the background. Share then
-        // opens the chooser, so that pending intent has to be allowed to do it.
-        if (Build.VERSION.SDK_INT >= 34 && action == ACTION_SHARE) {
-            val options = ActivityOptions.makeBasic()
-            options.setPendingIntentBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
-            )
-            return PendingIntent.getService(this, code, intent, flags, options.toBundle())
-        }
-        return PendingIntent.getService(this, code, intent, flags)
+        return PendingIntent.getService(this, code, intent, pendingFlags())
     }
 
     private fun pendingFlags(): Int {
