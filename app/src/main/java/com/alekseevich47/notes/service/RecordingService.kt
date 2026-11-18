@@ -18,6 +18,7 @@ import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.stt.RecordingSession
+import com.alekseevich47.notes.ui.widgets.WidgetMotion
 import com.alekseevich47.notes.ui.widgets.WidgetUpdater
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -74,7 +75,7 @@ class RecordingService : Service() {
                             }
                             MicPhase.PROCESSING -> {
                                 WidgetUpdater.pulse(this@RecordingService, 0f)
-                                delay(72)
+                                delay(WidgetMotion.DOT_FRAME_MS.toLong())
                             }
                             MicPhase.DONE -> {
                                 WidgetUpdater.pulse(this@RecordingService, 0f)

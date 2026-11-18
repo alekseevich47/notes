@@ -17,6 +17,15 @@ class NotesWidgetSmall : AppWidgetProvider() {
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         WidgetUpdater.forget(appWidgetIds)
     }
+
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle,
+    ) {
+        WidgetUpdater.onWidgetOptionsChanged(context)
+    }
 }
 
 class NotesWidgetWide : AppWidgetProvider() {

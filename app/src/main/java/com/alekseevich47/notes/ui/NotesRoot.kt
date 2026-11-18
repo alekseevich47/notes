@@ -46,6 +46,8 @@ fun NotesRoot(
     askForMic: Boolean,
     onPendingConsumed: () -> Unit,
     onMicPromptConsumed: () -> Unit,
+    openRecording: Boolean = false,
+    onOpenRecordingConsumed: () -> Unit = {},
     shell: ShellViewModel = hiltViewModel(),
     notesVm: NotesViewModel = hiltViewModel(),
     editorVm: EditorViewModel = hiltViewModel(),
@@ -92,6 +94,13 @@ fun NotesRoot(
             explainPermissions = true
             onMicPromptConsumed()
         }
+    }
+    LaunchedEffect(openRecording) {
+        if (!openRecording) return@LaunchedEffect
+        val live = shell.session.phase.value == MicPhase.RECORDING ||
+            shell.session.phase.value == MicPhase.PROCESSING
+        if (live && shell.ui.value.screen != Screen.LIST) shell.showList()
+        onOpenRecordingConsumed()
     }
     LaunchedEffect(phase, lastNote) {
         val readyId = lastNote

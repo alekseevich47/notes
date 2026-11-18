@@ -4,6 +4,7 @@ import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.ui.widgets.WidgetMotion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -14,6 +15,7 @@ class WidgetMotionTest {
     fun recordingZoomFollowsLevelContinuously() {
         val scales = (0..20).map { WidgetMotion.recordingScale(it / 20f) }
         assertEquals(1f, scales.first(), 0.001f)
+        assertEquals(1.18f, scales.last(), 0.001f)
         assertTrue(scales.last() > 1.08f)
         assertTrue(scales.last() <= 1.2f)
         scales.zipWithNext().forEach { (earlier, later) ->
@@ -34,6 +36,7 @@ class WidgetMotionTest {
             steps += value
         }
         assertTrue(steps.zipWithNext().all { (a, b) -> b > a })
+        assertTrue(steps[1] <= 0.5f)
         assertTrue(steps[1] < 0.75f)
         assertTrue(steps.last() > 0.9f)
         assertEquals(0f, WidgetMotion.easeLevel(Float.NaN, 0f), 0.001f)
@@ -120,6 +123,101 @@ class WidgetMotionTest {
         assertTrue(wide.contains("android:targetCellHeight=\"1\""))
         assertTrue(wide.contains("android:minWidth=\"250dp\""))
         assertTrue(wide.contains("android:minHeight=\"48dp\""))
+    }
+
+    @Test
+    fun processingFramesAdvanceQuickly() {
+        assertEquals(40, WidgetMotion.DOT_FRAME_MS)
+        val service = repoFile("src/main/java/com/alekseevich47/notes/service/RecordingService.kt").readText()
+        assertTrue(service.contains("WidgetMotion.DOT_FRAME_MS"))
+        assertFalse(service.contains("delay(72)"))
+    }
+
+    @Test
+    fun liveTextFollowsWidgetPrefs() {
+        assertFalse(WidgetMotion.liveTextEnabled(null, false))
+        assertFalse(WidgetMotion.liveTextEnabled("tone", false))
+        assertFalse(WidgetMotion.liveTextEnabled("  ", false))
+        assertTrue(WidgetMotion.liveTextEnabled("tone", true))
+        assertTrue(WidgetMotion.liveTextEnabled("system", false))
+        assertTrue(WidgetMotion.liveTextEnabled("SYSTEM", true))
+        val hint = WidgetMotion.LIVE_TEXT_OFF
+        assertEquals(
+            "Чтобы видеть текст во время записи, включите в настройках автозагрузку моделей или системное распознавание.",
+            hint,
+        )
+        assertEquals(hint, WidgetMotion.displayText(MicPhase.RECORDING, "привет", 280, liveText = false))
+        assertEquals(hint, WidgetMotion.displayText(MicPhase.IDLE, "привет", 280, liveText = false))
+        assertEquals(WidgetMotion.SAVED_NOTE_PROMPT, WidgetMotion.displayText(MicPhase.IDLE, "привет", 280, liveText = true))
+        assertEquals("привет", WidgetMotion.displayText(MicPhase.RECORDING, "привет", 280, liveText = true))
+        val strings = repoFile("src/main/res/values/strings.xml").readText()
+        assertTrue(strings.contains(">${hint}<"))
+    }
+
+    @Test
+    fun statusLineMatchesTheMicPhase() {
+        assertEquals(WidgetMotion.STATUS_LOADING, WidgetMotion.statusLabel(MicPhase.IDLE, modelLoading = true))
+        assertEquals(WidgetMotion.STATUS_LOADING, WidgetMotion.statusLabel(MicPhase.RECORDING, modelLoading = true))
+        assertEquals(WidgetMotion.STATUS_RECORDING, WidgetMotion.statusLabel(MicPhase.RECORDING, modelLoading = false))
+        assertEquals(WidgetMotion.STATUS_PROCESSING, WidgetMotion.statusLabel(MicPhase.PROCESSING, modelLoading = true))
+        assertNull(WidgetMotion.statusLabel(MicPhase.DONE, modelLoading = true))
+        assertNull(WidgetMotion.statusLabel(MicPhase.IDLE, modelLoading = false))
+        assertEquals("Загрузка...", WidgetMotion.STATUS_LOADING)
+        assertEquals("Запись...", WidgetMotion.STATUS_RECORDING)
+        assertEquals("Обработка...", WidgetMotion.STATUS_PROCESSING)
+        assertTrue(WidgetMotion.modelLoading(prefFlag = false, statusLines = listOf("DOWNLOADING")))
+        assertFalse(WidgetMotion.modelLoading(prefFlag = false, statusLines = listOf("INSTALLED")))
+        assertTrue(WidgetMotion.modelLoading(prefFlag = true, statusLines = emptyList()))
+    }
+
+    @Test
+    fun circleUsesTheSmallerSideAndWideMicIsAButton() {
+        assertEquals(74, WidgetMotion.smallMicSideDp(widthDp = 80, heightDp = 120, labelDp = 16))
+        assertEquals(50, WidgetMotion.smallMicSideDp(widthDp = 90, heightDp = 70, labelDp = 16))
+        assertEquals(0, WidgetMotion.smallMicSideDp(widthDp = 0, heightDp = 80, labelDp = 0))
+        val wide = WidgetMotion.wideMicSideDp(widthDp = 280, heightDp = 84)
+        assertTrue(wide > 48)
+        assertTrue(wide <= 76)
+        assertTrue(WidgetMotion.WIDE_MIC_HEIGHT_FRACTION >= 0.6f)
+        val small = repoFile("src/main/res/layout/widget_2x2.xml").readText()
+        val wideLayout = repoFile("src/main/res/layout/widget_4x2.xml").readText()
+        assertFalse(small.contains("fitXY"))
+        assertFalse(wideLayout.contains("fitXY"))
+        assertFalse(wideLayout.contains("ListView"))
+        assertTrue(small.contains("android:textSize=\"11sp\""))
+        assertTrue(wideLayout.contains("@+id/widget_words"))
+        assertTrue(wideLayout.contains("@+id/widget_text_block"))
+        val mic = repoFile("src/main/res/drawable/ic_widget_mic.xml").readText()
+        assertTrue(mic.contains("android:strokeWidth=\"1.15\""))
+        assertFalse(mic.contains("android:strokeWidth=\"1.7\""))
+        assertTrue(mic.contains("android:fillColor=\"@android:color/transparent\""))
+        val manifest = repoFile("src/main/AndroidManifest.xml").readText()
+        assertFalse(manifest.contains("WidgetWordsService"))
+    }
+
+    @Test
+    fun newTextFadesInAndLeavingLinesFadeOut() {
+        val appended = WidgetMotion.blockPaint(base = "один", incoming = "один два", frame = 0)
+        assertEquals("один два", appended.incoming)
+        assertEquals(4, appended.solidUntil)
+        assertTrue(appended.suffixAlpha < 0.5f)
+        assertEquals("", appended.outgoing)
+        val done = WidgetMotion.blockPaint(base = "один", incoming = "один два", frame = WidgetMotion.FADE_FRAMES)
+        assertEquals(1f, done.suffixAlpha, 0.001f)
+        assertEquals("", done.outgoing)
+        val leaving = WidgetMotion.blockPaint(base = "старая строка", incoming = "новая строка", frame = 0)
+        assertEquals("старая строка", leaving.outgoing)
+        assertEquals(1f, leaving.outgoingAlpha, 0.001f)
+        assertEquals(0f, leaving.suffixAlpha, 0.001f)
+        val mid = WidgetMotion.blockPaint(base = "старая строка", incoming = "новая строка", frame = WidgetMotion.FADE_FRAMES)
+        assertEquals("", mid.outgoing)
+        assertEquals(1f, mid.suffixAlpha, 0.001f)
+        val (outStart, inStart) = WidgetMotion.crossfade(0)
+        val (outEnd, inEnd) = WidgetMotion.crossfade(WidgetMotion.FADE_FRAMES)
+        assertEquals(1f, outStart, 0.001f)
+        assertEquals(0f, inStart, 0.001f)
+        assertEquals(0f, outEnd, 0.001f)
+        assertEquals(1f, inEnd, 0.001f)
     }
 
     @Test

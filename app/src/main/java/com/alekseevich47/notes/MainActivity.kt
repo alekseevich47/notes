@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
 
     private var openNoteId by mutableLongStateOf(-1L)
     private var askMic by mutableStateOf(false)
+    private var openRecording by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,8 +36,10 @@ class MainActivity : ComponentActivity() {
                 NotesRoot(
                     pendingNoteId = openNoteId.takeIf { it > 0 },
                     askForMic = askMic,
+                    openRecording = openRecording,
                     onPendingConsumed = { openNoteId = -1L },
                     onMicPromptConsumed = { askMic = false },
+                    onOpenRecordingConsumed = { openRecording = false },
                 )
             }
         }
@@ -77,14 +80,17 @@ class MainActivity : ComponentActivity() {
     private fun consumeIntent(intent: Intent?) {
         val id = intent?.getLongExtra(EXTRA_NOTE_ID, -1L) ?: -1L
         val needMic = intent?.getBooleanExtra(EXTRA_NEED_MIC, false) == true
-        AppLog.i(TAG, "intent hasNote=${id > 0} needMic=$needMic")
+        val openRec = intent?.getBooleanExtra(EXTRA_OPEN_RECORDING, false) == true
+        AppLog.i(TAG, "intent hasNote=${id > 0} needMic=$needMic openRecording=$openRec")
         if (id > 0) openNoteId = id
         if (needMic) askMic = true
+        if (openRec) openRecording = true
     }
 
     companion object {
         private const val TAG = "MainActivity"
         const val EXTRA_NOTE_ID = "note_id"
         const val EXTRA_NEED_MIC = "need_mic"
+        const val EXTRA_OPEN_RECORDING = "open_recording"
     }
 }

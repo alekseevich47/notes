@@ -6,6 +6,10 @@
     <string name="widget_2x2_desc">Кнопка записи заметки, размер 1×1</string>
     <string name="widget_4x2_desc">Запись с живым текстом, размер 4×1</string>
     <string name="widget_prompt">Нажмите на микрофон, чтобы создать заметку</string>
+    <string name="widget_live_off">Чтобы видеть текст во время записи, включите в настройках автозагрузку моделей или системное распознавание.</string>
+    <string name="widget_status_loading">Загрузка...</string>
+    <string name="widget_status_recording">Запись...</string>
+    <string name="widget_status_processing">Обработка...</string>
     <string name="channel_recording">Запись заметки</string>
     <string name="channel_recording_desc">Показывает, что голосовая заметка записывается, и даёт её остановить.</string>
     <string name="channel_ready">Готовые заметки</string>
