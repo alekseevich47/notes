@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -38,6 +39,11 @@ class NotePlayer @Inject constructor(
     private var commandedPlaying = false
     /** Replay seek is in flight, so a leftover ENDED must not drop the new play command. */
     private var replaying = false
+    /** play() is preparing a new item, so a stale playWhenReady must not clear the command. */
+    private var armingPlay = false
+    /** When a transport pause (notification / session) cleared playWhenReady. */
+    private var transportPausedAt = 0L
+    private var audioPath: String? = null
 
     private val tick = Runnable {
         tickerPosted = false
@@ -55,65 +61,133 @@ class NotePlayer @Inject constructor(
 
     fun player(): ExoPlayer = exo ?: buildPlayer().also { exo = it }
 
+    /**
+     * Editor opened [noteId]. If another note is loaded, stop it now so the bar
+     * cannot keep describing the previous note while this one is opening.
+     */
+    fun onEditorNote(noteId: Long) = onMain {
+        val shown = _state.value.noteId ?: return@onMain
+        if (shown == noteId) return@onMain
+        releaseSession()
+        audioPath = null
+        _state.value = PlayerUi()
+        notifyListeners()
+    }
+
+    /**
+     * The note on screen. Describes that note (known duration, position 0, not
+     * playing) unless this note is already the loaded session.
+     */
+    fun followOpenNote(noteId: Long, path: String?, title: String) = onMain {
+        val file = path?.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isFile }
+        if (file == null) {
+            releaseSession()
+            audioPath = null
+            if (_state.value != PlayerUi()) {
+                _state.value = PlayerUi()
+                notifyListeners()
+            }
+            return@onMain
+        }
+        if (PlaybackSnapshot.keepLoadedSession(noteId, _state.value.noteId, active && _state.value.engaged)) {
+            audioPath = file.absolutePath
+            return@onMain
+        }
+        if (PlaybackSnapshot.alreadyDescribed(noteId, _state.value.noteId, _state.value.engaged, _state.value.playing)) {
+            audioPath = file.absolutePath
+            return@onMain
+        }
+        releaseSession()
+        audioPath = file.absolutePath
+        _state.value = PlaybackSnapshot.opening(noteId, title, WavAudio.durationMs(file))
+        notifyListeners()
+    }
+
+    fun share(context: Context, path: String? = null, onFinished: ((Boolean) -> Unit)? = null) {
+        val wav = path?.takeIf { it.isNotBlank() } ?: audioPath
+        val noteId = _state.value.noteId
+        if (wav.isNullOrBlank()) {
+            if (onFinished != null) onMain { onFinished(false) }
+            return
+        }
+        NoteAudioShare.share(context, wav, noteId, onFinished)
+    }
+
+    fun prepareShare(context: Context, onReady: () -> Unit = {}) {
+        val path = audioPath ?: return
+        NoteAudioShare.prepare(context, path, _state.value.noteId, onReady)
+    }
+
     fun play(noteId: Long, path: String, title: String) = onMain {
         val file = File(path)
         if (!file.isFile) {
             active = false
             commandedPlaying = false
             replaying = false
+            armingPlay = false
             holdDuration = false
             sawGap = false
+            audioPath = null
             cancelTicker()
             exo?.pause()
             _state.value = PlayerUi()
             notifyListeners()
             return@onMain
         }
+        audioPath = file.absolutePath
+        // A preview writes noteId before any media is loaded. That is not a session.
+        val sessionNoteId = if (active && _state.value.engaged) _state.value.noteId else null
         active = true
         val player = player()
         val timelineSame = PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, noteId)
-        val same = PlaybackSnapshot.sessionMatches(_state.value.noteId, player.currentMediaItem?.mediaId, noteId)
+        val same = PlaybackSnapshot.sessionMatches(sessionNoteId, player.currentMediaItem?.mediaId, noteId)
         val ended = PlaybackSnapshot.endedOnTimeline(timelineSame, player.playbackState == Player.STATE_ENDED)
         if (PlaybackSnapshot.pauseInstead(same, commandedPlaying, ended)) {
             pauseAt(player, noteId, title)
             return@onMain
         }
-        var replay = false
-        if (!same) {
-            commandedPlaying = true
-            replaying = false
-            staleDurationMs = player.duration.takeIf { it > 0L } ?: 0L
-            sawGap = false
-            holdDuration = true
-            cancelTicker()
-            _state.value = PlaybackSnapshot.opening(noteId, title).copy(playing = true)
-            notifyListeners()
-            applyingMedia = true
-            try {
-                player.setMediaItem(
-                    MediaItem.Builder()
-                        .setMediaId(noteId.toString())
-                        .setUri(Uri.fromFile(file))
-                        .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
-                        .build(),
-                )
-                player.prepare()
-            } finally {
-                applyingMedia = false
+        armingPlay = true
+        try {
+            var replay = false
+            if (!same) {
+                commandedPlaying = true
+                replaying = false
+                staleDurationMs = player.duration.takeIf { it > 0L } ?: 0L
+                sawGap = false
+                holdDuration = true
+                cancelTicker()
+                _state.value = PlaybackSnapshot.opening(noteId, title).copy(playing = true, engaged = true)
+                notifyListeners()
+                applyingMedia = true
+                try {
+                    player.setMediaItem(
+                        MediaItem.Builder()
+                            .setMediaId(noteId.toString())
+                            .setUri(Uri.fromFile(file))
+                            .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+                            .build(),
+                    )
+                    player.prepare()
+                } finally {
+                    applyingMedia = false
+                }
+                // Sync listener flushes inside prepare are ignored. If that call already
+                // left the old timeline, the next publish can show the new duration.
+                noteGap(player)
+                settle(timelineOrMedia = true)
+            } else if (PlaybackSnapshot.replayFromStart(ended)) {
+                replay = true
+                replaying = true
+                commandedPlaying = true
+                player.seekTo(0)
             }
-            // Sync listener flushes inside prepare are ignored. If that call already
-            // left the old timeline, the next publish can show the new duration.
-            noteGap(player)
-            settle(timelineOrMedia = true)
-        } else if (PlaybackSnapshot.replayFromStart(ended)) {
-            replay = true
-            replaying = true
             commandedPlaying = true
-            player.seekTo(0)
+            transportPausedAt = 0L
+            player.play()
+            publish(noteId, title, seekOverrideMs = if (replay) 0L else null)
+        } finally {
+            armingPlay = false
         }
-        commandedPlaying = true
-        player.play()
-        publish(noteId, title, seekOverrideMs = if (replay) 0L else null)
     }
 
     fun toggle() = onMain {
@@ -122,7 +196,13 @@ class NotePlayer @Inject constructor(
         val noteId = _state.value.noteId
         val timelineSame = noteId != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, noteId)
         val ended = PlaybackSnapshot.endedOnTimeline(timelineSame, player.playbackState == Player.STATE_ENDED)
+        // ACTION_TOGGLE from the notification. The button the user saw is commandedPlaying.
         if (PlaybackSnapshot.pauseInstead(sessionMatches = true, commandedPlaying = commandedPlaying, ended = ended)) {
+            pauseAt(player)
+            return@onMain
+        }
+        if (!ended && PlaybackSnapshot.echoedTransportPause(transportPausedAt, SystemClock.uptimeMillis())) {
+            transportPausedAt = 0L
             pauseAt(player)
             return@onMain
         }
@@ -133,6 +213,7 @@ class NotePlayer @Inject constructor(
             player.seekTo(0)
         }
         commandedPlaying = true
+        transportPausedAt = 0L
         player.play()
         publish(seekOverrideMs = if (replay) 0L else null)
     }
@@ -167,31 +248,37 @@ class NotePlayer @Inject constructor(
     }
 
     fun stop() = onMain {
-        active = false
-        commandedPlaying = false
-        replaying = false
-        holdDuration = false
-        sawGap = false
-        cancelTicker()
-        exo?.stop()
-        exo?.clearMediaItems()
+        releaseSession()
+        audioPath = null
         _state.value = PlayerUi()
         notifyListeners()
     }
 
     fun release() = onMain {
-        active = false
-        commandedPlaying = false
-        replaying = false
-        holdDuration = false
-        sawGap = false
+        releaseSession()
         applyingMedia = false
-        cancelTicker()
+        audioPath = null
         val player = exo
         exo = null
         player?.release()
         _state.value = PlayerUi()
         notifyListeners()
+    }
+
+    private fun releaseSession() {
+        active = false
+        commandedPlaying = false
+        replaying = false
+        armingPlay = false
+        holdDuration = false
+        sawGap = false
+        staleDurationMs = 0L
+        transportPausedAt = 0L
+        cancelTicker()
+        val player = exo ?: return
+        player.pause()
+        player.stop()
+        player.clearMediaItems()
     }
 
     private fun buildPlayer(): ExoPlayer {
@@ -229,6 +316,12 @@ class NotePlayer @Inject constructor(
                         publish()
                     }
 
+                    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                        // Notification and headset pause land here, often without ACTION_TOGGLE.
+                        if (applyingMedia || !active) return
+                        publish()
+                    }
+
                     override fun onPositionDiscontinuity(
                         oldPosition: Player.PositionInfo,
                         newPosition: Player.PositionInfo,
@@ -251,6 +344,7 @@ class NotePlayer @Inject constructor(
                         val interesting = timeline || events.containsAny(
                             Player.EVENT_PLAYBACK_STATE_CHANGED,
                             Player.EVENT_IS_PLAYING_CHANGED,
+                            Player.EVENT_PLAY_WHEN_READY_CHANGED,
                             Player.EVENT_POSITION_DISCONTINUITY,
                         )
                         if (!interesting) return
@@ -290,8 +384,18 @@ class NotePlayer @Inject constructor(
         if (!active) return
         val player = exo ?: return
         val id = noteId
-        val timelineMatches = id != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, id)
+        val wasReplaying = replaying
         if (replaying && player.playbackState != Player.STATE_ENDED) replaying = false
+        val wasCommanded = commandedPlaying
+        val nextCommand = PlaybackSnapshot.playingCommand(
+            commandedPlaying = wasCommanded,
+            playWhenReady = player.playWhenReady,
+            replaying = wasReplaying,
+            armingPlay = armingPlay,
+        )
+        if (wasCommanded && !nextCommand) transportPausedAt = SystemClock.uptimeMillis()
+        commandedPlaying = nextCommand
+        val timelineMatches = id != null && PlaybackSnapshot.sameItem(player.currentMediaItem?.mediaId, id)
         val ended = PlaybackSnapshot.endedOnTimeline(
             timelineMatches,
             player.playbackState == Player.STATE_ENDED,
@@ -312,6 +416,7 @@ class NotePlayer @Inject constructor(
             playing = reading.playing,
             positionMs = reading.positionMs,
             durationMs = reading.durationMs,
+            engaged = true,
         )
         val previous = _state.value
         _state.value = next

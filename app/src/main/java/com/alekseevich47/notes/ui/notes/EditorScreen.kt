@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.alekseevich47.notes.player.PlaybackSnapshot
 import com.alekseevich47.notes.service.PlaybackService
 import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.PinDialog
@@ -108,6 +109,12 @@ fun EditorScreen(
         askPin = false
         pinError = null
         draftPin = null
+        viewModel.player.onEditorNote(noteId)
+    }
+    LaunchedEffect(noteId, note?.id, note?.audioPath) {
+        val shown = note ?: return@LaunchedEffect
+        if (shown.id != noteId) return@LaunchedEffect
+        viewModel.player.followOpenNote(shown.id, shown.audioPath, shown.title)
     }
 
     fun focusBody() {
@@ -206,12 +213,19 @@ fun EditorScreen(
                 }
             }
             if (current.audioPath != null) {
+                // The bar describes the open note. A session for a different note must not leak through.
+                val playback = if (player.noteId == current.id) {
+                    player
+                } else {
+                    PlaybackSnapshot.opening(current.id, current.title)
+                }
                 MiniPlayer(
-                    state = player,
+                    state = playback,
                     active = true,
                     onToggle = {
                         val path = current.audioPath ?: return@MiniPlayer
-                        if (player.noteId == current.id) {
+                        val sameSession = playback.engaged && playback.noteId == current.id
+                        if (sameSession) {
                             val intent = Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_TOGGLE)
                             context.startService(intent)
                         } else {
@@ -224,8 +238,14 @@ fun EditorScreen(
                         }
                     },
                     onSeek = { fraction ->
-                        if (player.noteId == current.id) {
+                        if (playback.engaged && playback.noteId == current.id) {
                             viewModel.player.seekFraction(fraction)
+                        }
+                    },
+                    onShare = {
+                        val path = current.audioPath ?: return@MiniPlayer
+                        viewModel.player.share(context, path) { ok ->
+                            if (!ok) onToast("Не удалось подготовить запись")
                         }
                     },
                 )

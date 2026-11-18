@@ -247,6 +247,76 @@ class PlaybackSnapshotTest {
         assertEquals(10_000L, resumed.durationMs)
     }
 
+    @Test
+    fun openingKeepsAKnownDurationAtRest() {
+        val opened = PlaybackSnapshot.opening(noteId = 4L, title = "Note", durationMs = 30_000L)
+        assertEquals(4L, opened.noteId)
+        assertEquals("Note", opened.title)
+        assertEquals(0L, opened.positionMs)
+        assertEquals(30_000L, opened.durationMs)
+        assertFalse(opened.playing)
+        assertFalse(opened.engaged)
+    }
+
+    @Test
+    fun openNoteKeepsTheLoadedSessionAndResetsAnyOther() {
+        assertTrue(PlaybackSnapshot.keepLoadedSession(openNoteId = 4L, sessionNoteId = 4L, engaged = true))
+        assertFalse(PlaybackSnapshot.keepLoadedSession(openNoteId = 5L, sessionNoteId = 4L, engaged = true))
+        assertFalse(PlaybackSnapshot.keepLoadedSession(openNoteId = 4L, sessionNoteId = 4L, engaged = false))
+        assertTrue(
+            PlaybackSnapshot.alreadyDescribed(
+                openNoteId = 5L,
+                sessionNoteId = 5L,
+                engaged = false,
+                playing = false,
+            ),
+        )
+        assertFalse(
+            PlaybackSnapshot.alreadyDescribed(
+                openNoteId = 5L,
+                sessionNoteId = 4L,
+                engaged = false,
+                playing = false,
+            ),
+        )
+    }
+
+    @Test
+    fun transportPauseClearsThePlayingCommand() {
+        assertFalse(
+            PlaybackSnapshot.playingCommand(
+                commandedPlaying = true,
+                playWhenReady = false,
+                replaying = false,
+            ),
+        )
+        assertTrue(
+            PlaybackSnapshot.playingCommand(
+                commandedPlaying = true,
+                playWhenReady = true,
+                replaying = false,
+            ),
+        )
+        assertTrue(
+            PlaybackSnapshot.playingCommand(
+                commandedPlaying = true,
+                playWhenReady = false,
+                replaying = true,
+            ),
+        )
+        assertTrue(
+            PlaybackSnapshot.playingCommand(
+                commandedPlaying = true,
+                playWhenReady = false,
+                replaying = false,
+                armingPlay = true,
+            ),
+        )
+        assertTrue(PlaybackSnapshot.echoedTransportPause(pausedAtMs = 1_000L, nowMs = 1_100L))
+        assertFalse(PlaybackSnapshot.echoedTransportPause(pausedAtMs = 1_000L, nowMs = 1_400L))
+        assertFalse(PlaybackSnapshot.echoedTransportPause(pausedAtMs = 0L, nowMs = 1_100L))
+    }
+
     private fun reading(
         position: Long,
         playing: Boolean,

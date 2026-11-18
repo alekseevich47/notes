@@ -4,4 +4,8 @@
     <files-path
         name="logs"
         path="logs/" />
+    <!-- M4A share copies. The original WAV stays in private files. -->
+    <cache-path
+        name="shared_audio"
+        path="share/" />
 </paths>

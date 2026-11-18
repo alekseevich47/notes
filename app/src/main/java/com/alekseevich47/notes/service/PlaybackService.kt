@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.service
 
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -34,6 +35,8 @@ class PlaybackService : Service() {
     private var session: MediaSession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var ticker: Job? = null
+    private var foreground = false
+    private var shareKey: String? = null
     private val refresh = { show(notePlayer.state.value) }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -59,6 +62,7 @@ class PlaybackService : Service() {
             ACTION_TOGGLE -> notePlayer.toggle()
             ACTION_REWIND -> notePlayer.seekBy(-10_000)
             ACTION_FORWARD -> notePlayer.seekBy(10_000)
+            ACTION_SHARE -> notePlayer.share(this)
             ACTION_STOP -> {
                 notePlayer.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -82,17 +86,25 @@ class PlaybackService : Service() {
     }
 
     private fun show(state: PlayerUi) {
-        if (state.noteId == null || !scope.isActive) {
+        if (!scope.isActive) return
+        if (state.noteId == null || !state.engaged) {
             ticker?.cancel()
             ticker = null
+            shareKey = null
+            if (foreground) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                foreground = false
+            }
             return
         }
+        prepareShare(state)
         val notification = buildNotification(state)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
             startForeground(NOTIF_ID, notification)
         }
+        foreground = true
         if (state.playing && ticker?.isActive != true) {
             ticker = scope.launch {
                 while (isActive) {
@@ -132,6 +144,7 @@ class PlaybackService : Service() {
             .addAction(android.R.drawable.ic_media_rew, "−10 с", action(ACTION_REWIND, 11))
             .addAction(playIcon, playLabel, action(ACTION_TOGGLE, 12))
             .addAction(android.R.drawable.ic_media_ff, "+10 с", action(ACTION_FORWARD, 13))
+            .addAction(android.R.drawable.ic_menu_share, "Поделиться", action(ACTION_SHARE, 16))
             .setDeleteIntent(action(ACTION_STOP, 14))
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -147,9 +160,26 @@ class PlaybackService : Service() {
         return PendingIntent.getActivity(this, 15, intent, pendingFlags())
     }
 
+    private fun prepareShare(state: PlayerUi) {
+        val key = state.noteId?.toString() ?: return
+        if (shareKey == key) return
+        shareKey = key
+        notePlayer.prepareShare(this)
+    }
+
     private fun action(action: String, code: Int): PendingIntent {
         val intent = Intent(this, PlaybackService::class.java).setAction(action)
-        return PendingIntent.getService(this, code, intent, pendingFlags())
+        val flags = pendingFlags()
+        // A notification tap may start this service in the background. Share then
+        // opens the chooser, so that pending intent has to be allowed to do it.
+        if (Build.VERSION.SDK_INT >= 34 && action == ACTION_SHARE) {
+            val options = ActivityOptions.makeBasic()
+            options.setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+            )
+            return PendingIntent.getService(this, code, intent, flags, options.toBundle())
+        }
+        return PendingIntent.getService(this, code, intent, flags)
     }
 
     private fun pendingFlags(): Int {
@@ -162,6 +192,7 @@ class PlaybackService : Service() {
         const val ACTION_TOGGLE = "com.alekseevich47.notes.play.TOGGLE"
         const val ACTION_REWIND = "com.alekseevich47.notes.play.REWIND"
         const val ACTION_FORWARD = "com.alekseevich47.notes.play.FORWARD"
+        const val ACTION_SHARE = "com.alekseevich47.notes.play.SHARE"
         const val ACTION_STOP = "com.alekseevich47.notes.play.STOP"
         const val EXTRA_NOTE_ID = "note_id"
         const val EXTRA_PATH = "path"
