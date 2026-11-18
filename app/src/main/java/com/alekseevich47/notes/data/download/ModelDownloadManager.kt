@@ -8,6 +8,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.alekseevich47.notes.log.AppLog
+import com.alekseevich47.notes.ui.widgets.WidgetUpdater
 import com.alekseevich47.notes.service.ModelDownloadWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -375,6 +376,14 @@ class ModelDownloadManager @Inject constructor(
 
     private fun writeStatus(kind: ModelKind, status: DownloadStatus, error: String?) {
         statusFile(kind).writeText(status.name + "\n" + (error ?: ""))
+        runCatching {
+            val main = android.os.Looper.getMainLooper()
+            if (main != null && android.os.Looper.myLooper() != main) {
+                android.os.Handler(main).post { runCatching { WidgetUpdater.refresh(context) } }
+            } else {
+                WidgetUpdater.refresh(context)
+            }
+        }
     }
 
     private fun readStatus(kind: ModelKind): DownloadStatus {

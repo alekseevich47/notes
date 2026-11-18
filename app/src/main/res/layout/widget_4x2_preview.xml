@@ -6,16 +6,17 @@
     android:background="@drawable/widget_bg"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="4dp"
+    android:paddingStart="6dp"
     android:paddingTop="4dp"
-    android:paddingEnd="8dp"
+    android:paddingEnd="10dp"
     android:paddingBottom="4dp">
 
     <FrameLayout
-        android:layout_width="40dp"
-        android:layout_height="40dp"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center_vertical"
         android:background="@drawable/widget_mic_plate"
-        android:padding="8dp">
+        android:padding="10dp">
 
         <ImageView
             android:layout_width="match_parent"
@@ -33,8 +34,8 @@
         android:fontFamily="@font/manrope_500"
         android:gravity="center_vertical"
         android:includeFontPadding="false"
-        android:maxLines="3"
-        android:text="@string/widget_prompt"
+        android:maxLines="4"
+        android:text="@string/widget_live_off"
         android:textColor="@color/widget_muted"
-        android:textSize="12sp" />
+        android:textSize="13sp" />
 </LinearLayout>
