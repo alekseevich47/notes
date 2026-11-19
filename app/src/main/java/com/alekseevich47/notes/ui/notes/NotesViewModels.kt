@@ -177,6 +177,7 @@ class EditorViewModel @Inject constructor(
                 val doc = snapshot.document
                 val pristine = snapshot.audioPath == null &&
                     doc.text.isBlank() &&
+                    doc.trailing.isBlank() &&
                     doc.tables.isEmpty() &&
                     doc.marks.isEmpty() &&
                     snapshot.title == "Заметка #${snapshot.seq}"
@@ -202,6 +203,7 @@ class EditorViewModel @Inject constructor(
         val doc = snapshot.document
         val pristine = snapshot.audioPath == null &&
             doc.text.isBlank() &&
+            doc.trailing.isBlank() &&
             doc.tables.isEmpty() &&
             doc.marks.isEmpty() &&
             snapshot.title == "Заметка #${snapshot.seq}"
