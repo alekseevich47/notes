@@ -1,5 +1,6 @@
 package com.alekseevich47.notes
 
+import com.alekseevich47.notes.player.NotificationPost
 import com.alekseevich47.notes.player.PlaybackSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -315,6 +316,28 @@ class PlaybackSnapshotTest {
         assertTrue(PlaybackSnapshot.echoedTransportPause(pausedAtMs = 1_000L, nowMs = 1_100L))
         assertFalse(PlaybackSnapshot.echoedTransportPause(pausedAtMs = 1_000L, nowMs = 1_400L))
         assertFalse(PlaybackSnapshot.echoedTransportPause(pausedAtMs = 0L, nowMs = 1_100L))
+    }
+
+    @Test
+    fun steadyPlaybackDoesNotRepostTheNotification() {
+        val posted = NotificationPost(
+            noteId = 4L,
+            title = "Note",
+            playing = true,
+            durationMs = 220_000L,
+            positionMs = 12_000L,
+            wallMs = 5_000L,
+        )
+        val ticked = posted.copy(positionMs = 12_800L, wallMs = 5_800L)
+        val seek = posted.copy(positionMs = 22_000L, wallMs = 5_400L)
+        val paused = posted.copy(playing = false, positionMs = 12_800L, wallMs = 5_800L)
+        assertFalse(PlaybackSnapshot.shouldPostPlaybackNotification(posted, ticked))
+        assertTrue(PlaybackSnapshot.shouldPostPlaybackNotification(posted, seek))
+        assertTrue(PlaybackSnapshot.shouldPostPlaybackNotification(posted, paused))
+        assertTrue(PlaybackSnapshot.shouldPostPlaybackNotification(null, posted))
+        assertEquals("0:12 / 3:40", PlaybackSnapshot.notificationTimeText(12_000L, 220_000L))
+        assertEquals(" / 3:40", PlaybackSnapshot.notificationDurationSuffix(220_000L))
+        assertEquals(5_000L, PlaybackSnapshot.chronometerBase(elapsedRealtimeMs = 17_000L, positionMs = 12_000L))
     }
 
     private fun reading(

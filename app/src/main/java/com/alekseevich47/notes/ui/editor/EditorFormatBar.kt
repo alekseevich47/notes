@@ -204,7 +204,7 @@ private val FormatTableGrid: ImageVector by lazy {
 private fun ImageVector.Builder.addRoundedCell(x: Float, y: Float, size: Float, radius: Float) {
     path(
         stroke = SolidColor(Color.Black),
-        strokeLineWidth = 1.45f,
+        strokeLineWidth = 0.9f,
         strokeLineCap = StrokeCap.Round,
         strokeLineJoin = StrokeJoin.Round,
     ) {

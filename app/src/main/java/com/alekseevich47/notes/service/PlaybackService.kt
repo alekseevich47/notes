@@ -8,23 +8,23 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaStyleNotificationHelper
 import com.alekseevich47.notes.MainActivity
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.player.NotePlayer
+import com.alekseevich47.notes.player.NotificationPost
 import com.alekseevich47.notes.player.PlaybackSnapshot
 import com.alekseevich47.notes.player.PlayerUi
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -33,9 +33,9 @@ class PlaybackService : Service() {
 
     private var session: MediaSession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var ticker: Job? = null
     private var foreground = false
     private var shareKey: String? = null
+    private var posted: NotificationPost? = null
     private val refresh = { show(notePlayer.state.value) }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -74,8 +74,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
-        ticker?.cancel()
-        ticker = null
+        posted = null
         notePlayer.removeListener(refresh)
         session?.release()
         session = null
@@ -86,9 +85,9 @@ class PlaybackService : Service() {
 
     private fun show(state: PlayerUi) {
         if (!scope.isActive) return
-        if (state.noteId == null || !state.engaged) {
-            ticker?.cancel()
-            ticker = null
+        val noteId = state.noteId
+        if (noteId == null || !state.engaged) {
+            posted = null
             shareKey = null
             if (foreground) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -97,49 +96,52 @@ class PlaybackService : Service() {
             return
         }
         prepareShare(state)
-        val notification = buildNotification(state)
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(NOTIF_ID, notification)
-        }
-        foreground = true
-        if (state.playing && ticker?.isActive != true) {
-            ticker = scope.launch {
-                while (isActive) {
-                    delay(NOTIF_POLL_MS)
-                    val current = notePlayer.state.value
-                    if (!current.playing || current.noteId == null) break
-                    val manager = getSystemService(NotificationManager::class.java)
-                    manager.notify(NOTIF_ID, buildNotification(current))
-                }
+        val now = SystemClock.elapsedRealtime()
+        val next = NotificationPost(
+            noteId = noteId,
+            title = state.title,
+            playing = state.playing,
+            durationMs = state.durationMs,
+            positionMs = state.positionMs,
+            wallMs = now,
+        )
+        if (foreground && !PlaybackSnapshot.shouldPostPlaybackNotification(posted, next)) return
+        val notification = buildNotification(state, now)
+        if (!foreground) {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIF_ID, notification)
             }
+            foreground = true
+        } else {
+            getSystemService(NotificationManager::class.java).notify(NOTIF_ID, notification)
         }
-        if (!state.playing) {
-            ticker?.cancel()
-            ticker = null
-        }
+        posted = next
     }
 
-    private fun buildNotification(state: PlayerUi): Notification {
+    private fun buildNotification(state: PlayerUi, elapsedRealtimeMs: Long): Notification {
         val mediaSession = session
         val open = openPending(state.noteId)
         val style = if (mediaSession != null) {
-            MediaStyleNotificationHelper.MediaStyle(mediaSession).setShowActionsInCompactView(0, 1, 2)
+            MediaStyleNotificationHelper.DecoratedMediaCustomViewStyle(mediaSession)
+                .setShowActionsInCompactView(0, 1, 2)
         } else {
             null
         }
         val playIcon = if (state.playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         val playLabel = if (state.playing) "Пауза" else "Слушать"
-        val duration = state.durationMs.coerceAtLeast(1L)
+        val time = timeRow(state, elapsedRealtimeMs)
         val builder = NotificationCompat.Builder(this, AppChannels.PLAYBACK)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(state.title.ifBlank { "Заметка" })
-            .setContentText(PlaybackSnapshot.clock(state.positionMs) + " / " + PlaybackSnapshot.clock(state.durationMs))
+            .setContentText(PlaybackSnapshot.notificationTimeText(state.positionMs, state.durationMs))
+            .setCustomContentView(time)
+            .setCustomBigContentView(timeRow(state, elapsedRealtimeMs))
             .setContentIntent(open)
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
             .setOngoing(state.playing)
-            .setProgress(duration.toInt().coerceAtLeast(1), state.positionMs.coerceAtMost(duration).toInt(), state.durationMs <= 0)
             .addAction(android.R.drawable.ic_media_rew, "−10 с", action(ACTION_REWIND, 11))
             .addAction(playIcon, playLabel, action(ACTION_TOGGLE, 12))
             .addAction(android.R.drawable.ic_media_ff, "+10 с", action(ACTION_FORWARD, 13))
@@ -148,7 +150,31 @@ class PlaybackService : Service() {
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         if (style != null) builder.setStyle(style)
-        return builder.build()
+        val notification = builder.build()
+        // DecoratedMediaCustomViewStyle in media3 1.5 does not copy the platform
+        // session token. The shade still needs it so transport stays on this player.
+        if (mediaSession != null) {
+            notification.extras.putParcelable(
+                Notification.EXTRA_MEDIA_SESSION,
+                mediaSession.platformToken,
+            )
+        }
+        return notification
+    }
+
+    private fun timeRow(state: PlayerUi, elapsedRealtimeMs: Long): RemoteViews {
+        val views = RemoteViews(packageName, R.layout.playback_notification_time)
+        views.setChronometer(
+            R.id.playback_elapsed,
+            PlaybackSnapshot.chronometerBase(elapsedRealtimeMs, state.positionMs),
+            null,
+            state.playing,
+        )
+        views.setTextViewText(
+            R.id.playback_duration,
+            PlaybackSnapshot.notificationDurationSuffix(state.durationMs),
+        )
+        return views
     }
 
     private fun openPending(noteId: Long?): PendingIntent {
@@ -187,6 +213,5 @@ class PlaybackService : Service() {
         const val EXTRA_PATH = "path"
         const val EXTRA_TITLE = "title"
         private const val NOTIF_ID = 43
-        private const val NOTIF_POLL_MS = 800L
     }
 }

@@ -11,6 +11,19 @@ data class PlayerUi(
 )
 
 /**
+ * The last playback notification that was actually posted.
+ * [wallMs] is a monotonic clock reading taken at that post.
+ */
+data class NotificationPost(
+    val noteId: Long,
+    val title: String,
+    val playing: Boolean,
+    val durationMs: Long,
+    val positionMs: Long,
+    val wallMs: Long,
+)
+
+/**
  * Pure playback snapshot. The player reports a negative unset duration until the
  * timeline is ready, and the current position does not move unless something polls it.
  */
@@ -184,6 +197,62 @@ object PlaybackSnapshot {
         val total = (ms / 1000L).coerceAtLeast(0L)
         return "%d:%02d".format(total / 60L, total % 60L)
     }
+
+    /** "0:12 / 3:40". Stable enough to read; the live elapsed half is a chronometer. */
+    fun notificationTimeText(positionMs: Long, durationMs: Long): String {
+        return clock(positionMs) + " / " + clock(durationMs)
+    }
+
+    /** Suffix next to the chronometer so the row reads "0:12 / 3:40". */
+    fun notificationDurationSuffix(durationMs: Long): String = " / " + clock(durationMs)
+
+    /**
+     * [android.widget.Chronometer.setBase] value. The widget shows
+     * `elapsedRealtime - base`, so this base freezes on the current position
+     * when the chronometer is not started and counts up when it is.
+     */
+    fun chronometerBase(elapsedRealtimeMs: Long, positionMs: Long): Long {
+        return elapsedRealtimeMs - positionMs.coerceAtLeast(0L)
+    }
+
+    /**
+     * True when playback position is the anchor plus wall-clock time, within
+     * [toleranceMs]. A seek falls outside that window.
+     */
+    fun playbackClockSteady(
+        anchorPositionMs: Long,
+        anchorWallMs: Long,
+        positionMs: Long,
+        nowWallMs: Long,
+        toleranceMs: Long = NOTIFICATION_DRIFT_MS,
+    ): Boolean {
+        val expected = anchorPositionMs + (nowWallMs - anchorWallMs)
+        val drift = positionMs - expected
+        val absDrift = if (drift < 0L) -drift else drift
+        return absDrift <= toleranceMs
+    }
+
+    /**
+     * Steady playback must not post again: the chronometer moves the clock
+     * inside the existing notification. A new note, title, play/pause, duration,
+     * or seek does post.
+     */
+    fun shouldPostPlaybackNotification(previous: NotificationPost?, next: NotificationPost): Boolean {
+        if (previous == null) return true
+        if (previous.noteId != next.noteId) return true
+        if (previous.title != next.title) return true
+        if (previous.playing != next.playing) return true
+        if (previous.durationMs != next.durationMs) return true
+        if (!next.playing) return previous.positionMs != next.positionMs
+        return !playbackClockSteady(
+            anchorPositionMs = previous.positionMs,
+            anchorWallMs = previous.wallMs,
+            positionMs = next.positionMs,
+            nowWallMs = next.wallMs,
+        )
+    }
+
+    const val NOTIFICATION_DRIFT_MS: Long = 1_200L
 
     /** Null stops the main-thread poll so a paused player does not wake the CPU. */
     fun pollIntervalMs(playing: Boolean): Long? = if (playing) TICK_MS else null

@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -51,11 +53,20 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.alekseevich47.notes.domain.MarkStyle
+import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.player.PlaybackSnapshot
 import com.alekseevich47.notes.service.PlaybackService
 import com.alekseevich47.notes.ui.components.AppDialog
@@ -70,6 +81,7 @@ import com.alekseevich47.notes.ui.editor.observeSelectionTaps
 import com.alekseevich47.notes.ui.editor.TableGrid
 import com.alekseevich47.notes.ui.player.MiniPlayer
 import com.alekseevich47.notes.ui.theme.NotesFont
+import kotlin.math.roundToInt
 
 private enum class HiddenPinStage { UNLOCK, CREATE, CONFIRM }
 
@@ -188,6 +200,15 @@ fun EditorScreen(
                     .fillMaxWidth(),
             ) {
                 val minBody = maxHeight
+                KeepCaretVisible(
+                    noteId = current.id,
+                    text = current.document.text,
+                    marks = current.document.marks,
+                    hiddenLocked = !unlocked && current.document.marks.any { it.style == MarkStyle.HIDDEN },
+                    focused = formats.bodyFocused,
+                    textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp),
+                    scroll = scroll,
+                )
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -387,4 +408,132 @@ fun EditorScreen(
             onDismiss = { askTable = false },
         )
     }
+}
+
+/**
+ * Scrolls the note body when typing pushes the caret below the viewport.
+ * Selection changes do not move the scroll: only a text edit while the body
+ * is focused does, and only downward.
+ */
+@Composable
+private fun KeepCaretVisible(
+    noteId: Long,
+    text: String,
+    marks: List<TextMark>,
+    hiddenLocked: Boolean,
+    focused: Boolean,
+    textWidth: Dp,
+    scroll: ScrollState,
+) {
+    val tracked = remember(noteId) { mutableStateOf(text) }
+    var edited by remember(noteId) { mutableStateOf(false) }
+    var caret by remember(noteId) { mutableIntStateOf(text.length) }
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val body = MaterialTheme.typography.bodyLarge.copy(fontFamily = NotesFont)
+    val labelStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = NotesFont)
+    val viewport = scroll.viewportSize
+    LaunchedEffect(noteId, text, focused, textWidth, viewport) {
+        val before = tracked.value
+        val textChanged = before != text
+        if (!focused || (!textChanged && !edited)) {
+            tracked.value = text
+            return@LaunchedEffect
+        }
+        if (textChanged) {
+            caret = inferCaretAfterEdit(before, text)
+            edited = true
+        }
+        tracked.value = text
+        val widthPx = with(density) { textWidth.roundToPx().coerceAtLeast(1) }
+        val marginPx = with(density) { 16.dp.roundToPx() }
+        val censorPx = if (!hiddenLocked) {
+            0
+        } else {
+            measurer.measure(
+                text = "Открыть скрытый текст",
+                style = labelStyle,
+                constraints = Constraints(maxWidth = widthPx),
+            ).size.height + with(density) { 6.dp.roundToPx() }
+        }
+        val layout = measurer.measure(
+            text = annotatedNote(text, marks),
+            style = body,
+            constraints = Constraints(maxWidth = widthPx),
+        )
+        val rect = layout.getCursorRect(caret.coerceIn(0, text.length))
+        val caretBottom = censorPx + rect.bottom.roundToInt()
+        repeat(4) { frame ->
+            withFrameNanos { }
+            val delta = revealCaretDelta(
+                scrollValue = scroll.value,
+                viewport = scroll.viewportSize,
+                caretBottom = caretBottom,
+                marginPx = marginPx,
+            )
+            if (delta == 0) return@LaunchedEffect
+            val max = scroll.maxValue
+            val target = (scroll.value + delta).coerceAtMost(max.coerceAtLeast(0))
+            if (target <= scroll.value && frame < 3) return@repeat
+            if (target > scroll.value) scroll.scrollTo(target)
+            return@LaunchedEffect
+        }
+    }
+}
+
+private fun annotatedNote(text: String, marks: List<TextMark>) = buildAnnotatedString {
+    append(text)
+    marks.forEach { mark ->
+        val style = when (mark.style) {
+            MarkStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
+            MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
+            else -> null
+        } ?: return@forEach
+        val start = mark.start.coerceIn(0, length)
+        val end = mark.end.coerceIn(0, length)
+        if (end > start) addStyle(style, start, end)
+    }
+}
+
+/** Caret after a local edit. A long tail rewrite (list renumber) keeps the caret at the start of the span. */
+internal fun inferCaretAfterEdit(before: String, after: String): Int {
+    if (after.isEmpty()) return 0
+    val prefix = sharedPrefix(before, after)
+    var suffix = 0
+    val maxSuffix = minOf(before.length - prefix, after.length - prefix)
+    while (
+        suffix < maxSuffix &&
+        before[before.length - 1 - suffix] == after[after.length - 1 - suffix]
+    ) {
+        suffix++
+    }
+    val insertedStart = prefix
+    val insertedEnd = (after.length - suffix).coerceAtLeast(insertedStart)
+    val removedLen = before.length - prefix - suffix
+    val insertedLen = insertedEnd - insertedStart
+    if (removedLen > 24 && insertedLen > 24) return insertedStart.coerceIn(0, after.length)
+    return insertedEnd.coerceIn(0, after.length)
+}
+
+/**
+ * How far [scrollValue] must move down so [caretBottom] sits [marginPx] above
+ * the bottom of [viewport]. Zero when the caret is already inside that window,
+ * including when it is above the viewport.
+ */
+internal fun revealCaretDelta(
+    scrollValue: Int,
+    viewport: Int,
+    caretBottom: Int,
+    marginPx: Int,
+): Int {
+    if (viewport <= 0) return 0
+    val hidden = caretBottom + marginPx - (scrollValue + viewport)
+    return hidden.coerceAtLeast(0)
+}
+
+private fun sharedPrefix(left: String, right: String): Int {
+    val limit = minOf(left.length, right.length)
+    var index = 0
+    while (index < limit && left[index] == right[index]) index++
+    return index
 }
