@@ -865,6 +865,10 @@ fun TrailingNoteField(
             fontFamily = NotesFont,
         ),
         cursorBrush = SolidColor(NotesPurple),
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Sentences,
+            autoCorrectEnabled = true,
+        ),
         modifier = modifier
             .fillMaxWidth()
             .padding(top = 8.dp)
@@ -921,6 +925,10 @@ private fun TableCellField(
             color = MaterialTheme.colorScheme.onSurface,
         ),
         cursorBrush = SolidColor(NotesPurple),
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Sentences,
+            autoCorrectEnabled = true,
+        ),
         modifier = modifier
             .heightIn(min = 44.dp)
             .background(if (header) headerBackground else Color.Transparent)
