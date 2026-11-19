@@ -310,9 +310,10 @@ internal fun RichNoteEditor(
         }
     }
     toolbar.onSelectionGestureEnded = {
-        if (field.selection.collapsed) return@onSelectionGestureEnded
-        menuOverflow = false
-        menuVisible = true
+        if (!field.selection.collapsed) {
+            menuOverflow = false
+            menuVisible = true
+        }
     }
     toolbar.onSelectionGestureBegan = {
         menuVisible = false

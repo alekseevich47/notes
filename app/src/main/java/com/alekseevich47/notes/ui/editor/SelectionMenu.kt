@@ -189,7 +189,8 @@ private fun KeepMenuAboveHandles() {
 private fun liftSelectionMenuWindow(root: View): Boolean {
     val params = root.layoutParams as? WindowManager.LayoutParams ?: return false
     if (!root.isAttachedToWindow) return false
-    val above = WindowManager.LayoutParams.TYPE_APPLICATION_ABOVE_SUB_PANEL
+    // Public SDK stubs omit TYPE_APPLICATION_ABOVE_SUB_PANEL (@hide); value is 1005.
+    val above = 1005
     if (params.type == above) return true
     val previous = params.type
     val windowManager = root.context.getSystemService(WindowManager::class.java) ?: return false
