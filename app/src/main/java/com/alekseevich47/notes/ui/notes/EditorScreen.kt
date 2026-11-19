@@ -51,6 +51,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -206,6 +208,9 @@ fun EditorScreen(
                     .fillMaxWidth(),
             ) {
                 val minBody = maxHeight
+                val density = LocalDensity.current
+                var trailingFocused by remember(current.id) { mutableStateOf(false) }
+                var trailingTopPx by remember(current.id) { mutableIntStateOf(-1) }
                 KeepCaretVisible(
                     noteId = current.id,
                     text = current.document.text,
@@ -215,6 +220,20 @@ fun EditorScreen(
                     textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp),
                     scroll = scroll,
                 )
+                if (current.document.tables.isNotEmpty()) {
+                    KeepCaretVisible(
+                        noteId = current.id,
+                        text = current.document.trailing,
+                        marks = emptyList(),
+                        hiddenLocked = false,
+                        focused = trailingFocused,
+                        textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp),
+                        scroll = scroll,
+                        contentTopPx = trailingTopPx,
+                        topInsetPx = with(density) { 8.dp.roundToPx() },
+                        followEdits = true,
+                    )
+                }
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -269,6 +288,21 @@ fun EditorScreen(
                                     text = current.document.trailing,
                                     onText = viewModel::setTrailing,
                                     focusRequest = trailingFocus,
+                                    modifier = Modifier
+                                        .onFocusChanged { trailingFocused = it.hasFocus }
+                                        .onGloballyPositioned { coords ->
+                                            val content = bodyCoords
+                                            if (
+                                                content == null ||
+                                                !content.isAttached ||
+                                                !coords.isAttached
+                                            ) {
+                                                return@onGloballyPositioned
+                                            }
+                                            val origin = content.localToRoot(Offset.Zero)
+                                            val here = coords.localToRoot(Offset.Zero)
+                                            trailingTopPx = (here.y - origin.y).roundToInt()
+                                        },
                                 )
                             }
                         }
@@ -417,9 +451,13 @@ fun EditorScreen(
 }
 
 /**
- * Scrolls the note body when typing pushes the caret below the viewport.
- * Selection changes do not move the scroll: only a text edit while the body
- * is focused does, and only downward.
+ * Scrolls a note field when typing pushes the caret below the viewport.
+ * Selection changes do not move the scroll: only a text edit does, and only
+ * downward. The body ignores edits while it is unfocused. The trailing field
+ * passes [followEdits] so growth still scrolls if the focus callback is late.
+ *
+ * [contentTopPx] is the field's top inside the scroll content. Pass -1 until
+ * that position is known so a tall table above the field is included.
  */
 @Composable
 private fun KeepCaretVisible(
@@ -430,6 +468,9 @@ private fun KeepCaretVisible(
     focused: Boolean,
     textWidth: Dp,
     scroll: ScrollState,
+    contentTopPx: Int = 0,
+    topInsetPx: Int = 0,
+    followEdits: Boolean = false,
 ) {
     val tracked = remember(noteId) { mutableStateOf(text) }
     var edited by remember(noteId) { mutableStateOf(false) }
@@ -439,16 +480,16 @@ private fun KeepCaretVisible(
     val body = MaterialTheme.typography.bodyLarge.copy(fontFamily = NotesFont)
     val labelStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = NotesFont)
     val viewport = scroll.viewportSize
-    LaunchedEffect(noteId, text, focused, textWidth, viewport) {
+    LaunchedEffect(noteId, text, focused, textWidth, viewport, contentTopPx, topInsetPx) {
+        if (contentTopPx < 0) return@LaunchedEffect
         val before = tracked.value
         val textChanged = before != text
-        if (!focused || (!textChanged && !edited)) {
-            tracked.value = text
-            return@LaunchedEffect
-        }
-        if (textChanged) {
+        if (textChanged && (focused || followEdits)) {
             caret = inferCaretAfterEdit(before, text)
             edited = true
+        } else if (!focused || !edited) {
+            tracked.value = text
+            return@LaunchedEffect
         }
         tracked.value = text
         val widthPx = with(density) { textWidth.roundToPx().coerceAtLeast(1) }
@@ -468,7 +509,11 @@ private fun KeepCaretVisible(
             constraints = Constraints(maxWidth = widthPx),
         )
         val rect = layout.getCursorRect(caret.coerceIn(0, text.length))
-        val caretBottom = censorPx + rect.bottom.roundToInt()
+        val caretBottom = trailingCaretBottom(
+            fieldTopPx = contentTopPx,
+            topInsetPx = topInsetPx + censorPx,
+            cursorBottomPx = rect.bottom.roundToInt(),
+        )
         repeat(4) { frame ->
             withFrameNanos { }
             val delta = revealCaretDelta(
@@ -500,6 +545,10 @@ private fun annotatedNote(text: String, marks: List<TextMark>) = buildAnnotatedS
         if (end > start) addStyle(style, start, end)
     }
 }
+
+/** Caret bottom inside the scroll content: field top, padding above the text, then the cursor. */
+internal fun trailingCaretBottom(fieldTopPx: Int, topInsetPx: Int, cursorBottomPx: Int): Int =
+    fieldTopPx + topInsetPx + cursorBottomPx
 
 /** Caret after a local edit. A long tail rewrite (list renumber) keeps the caret at the start of the span. */
 internal fun inferCaretAfterEdit(before: String, after: String): Int {

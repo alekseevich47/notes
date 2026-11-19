@@ -2,6 +2,7 @@ package com.alekseevich47.notes
 
 import com.alekseevich47.notes.ui.notes.inferCaretAfterEdit
 import com.alekseevich47.notes.ui.notes.revealCaretDelta
+import com.alekseevich47.notes.ui.notes.trailingCaretBottom
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -30,5 +31,20 @@ class EditorCaretScrollTest {
         assertEquals(56, revealCaretDelta(scrollValue = 0, viewport = 400, caretBottom = 440, marginPx = 16))
         assertEquals(0, revealCaretDelta(scrollValue = 300, viewport = 400, caretBottom = 40, marginPx = 16))
         assertEquals(0, revealCaretDelta(scrollValue = 0, viewport = 0, caretBottom = 80, marginPx = 16))
+    }
+
+    @Test
+    fun trailingCaretUnderATallTableScrollsDown() {
+        val bottom = trailingCaretBottom(fieldTopPx = 2000, topInsetPx = 24, cursorBottomPx = 48)
+        assertEquals(2072, bottom)
+        assertEquals("под таблицей!".length, inferCaretAfterEdit("под таблицей", "под таблицей!"))
+        assertEquals(
+            1688,
+            revealCaretDelta(scrollValue = 0, viewport = 400, caretBottom = bottom, marginPx = 16),
+        )
+        assertEquals(
+            0,
+            revealCaretDelta(scrollValue = 1800, viewport = 400, caretBottom = bottom, marginPx = 16),
+        )
     }
 }
