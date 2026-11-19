@@ -44,6 +44,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -64,6 +65,7 @@ import com.alekseevich47.notes.ui.editor.EditorFormatBar
 import com.alekseevich47.notes.ui.editor.NoteEditorController
 import com.alekseevich47.notes.ui.editor.NoteSurfaceBridge
 import com.alekseevich47.notes.ui.editor.RichNoteEditor
+import com.alekseevich47.notes.ui.editor.TrailingNoteField
 import com.alekseevich47.notes.ui.editor.observeSelectionTaps
 import com.alekseevich47.notes.ui.editor.TableGrid
 import com.alekseevich47.notes.ui.player.MiniPlayer
@@ -93,6 +95,9 @@ fun EditorScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val scroll = rememberScrollState()
     val bodyTap = remember { MutableInteractionSource() }
+    var bodyEpoch by remember { mutableStateOf(0) }
+    var trailingFocus by remember { mutableStateOf(0) }
+    var knownTableCount by remember(noteId) { mutableStateOf(-1) }
     val surface = remember { NoteSurfaceBridge() }
     var bodyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     SideEffect {
@@ -115,6 +120,18 @@ fun EditorScreen(
         val shown = note ?: return@LaunchedEffect
         if (shown.id != noteId) return@LaunchedEffect
         viewModel.player.followOpenNote(shown.id, shown.audioPath, shown.title)
+    }
+    LaunchedEffect(noteId, note?.id, note?.document?.tables?.size) {
+        val shown = note ?: return@LaunchedEffect
+        if (shown.id != noteId) return@LaunchedEffect
+        val count = shown.document.tables.size
+        if (knownTableCount >= 0 && count > knownTableCount) {
+            trailingFocus++
+            withFrameNanos { }
+            withFrameNanos { }
+            scroll.scrollTo(scroll.maxValue)
+        }
+        knownTableCount = count
     }
 
     fun focusBody() {
@@ -181,13 +198,16 @@ fun EditorScreen(
                         .clickable(
                             interactionSource = bodyTap,
                             indication = null,
-                            onClickLabel = "Начните писать",
-                            onClick = { focusBody() },
+                            onClickLabel = if (current.document.tables.isEmpty()) "Начните писать" else "Продолжите писать",
+                            onClick = {
+                                if (current.document.tables.isEmpty()) focusBody() else trailingFocus++
+                            },
                         )
                         .padding(horizontal = 20.dp),
                 ) {
+                    val hasTables = current.document.tables.isNotEmpty()
                     Column(Modifier.fillMaxWidth()) {
-                        key(current.id) {
+                        key(current.id, bodyEpoch) {
                             RichNoteEditor(
                                 document = current.document,
                                 hiddenUnlocked = unlocked,
@@ -202,11 +222,28 @@ fun EditorScreen(
                             )
                         }
                         current.document.tables.forEach { table ->
-                            TableGrid(
-                                table = table,
-                                onChange = viewModel::updateTable,
-                                onDelete = { viewModel.removeTable(table.id) },
-                            )
+                            key(table.id) {
+                                TableGrid(
+                                    table = table,
+                                    onChange = viewModel::updateTable,
+                                    onDelete = {
+                                        val last = current.document.tables.none { it.id != table.id }
+                                        if (last && current.document.trailing.isNotEmpty()) {
+                                            bodyEpoch++
+                                        }
+                                        viewModel.removeTable(table.id)
+                                    },
+                                )
+                            }
+                        }
+                        if (hasTables) {
+                            key(current.id) {
+                                TrailingNoteField(
+                                    text = current.document.trailing,
+                                    onText = viewModel::setTrailing,
+                                    focusRequest = trailingFocus,
+                                )
+                            }
                         }
                         Spacer(Modifier.height(24.dp))
                     }

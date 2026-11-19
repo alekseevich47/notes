@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.focus.focusRequester
@@ -68,14 +70,15 @@ import com.alekseevich47.notes.domain.MarkEdits
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteTable
+import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import kotlin.math.max
 import kotlin.math.min
 
-private const val TABLE_MAX_ROWS = 8
-private const val TABLE_MAX_COLS = 6
+private const val TABLE_MAX_ROWS = NoteTables.MAX_ROWS
+private const val TABLE_MAX_COLS = NoteTables.MAX_COLS
 
 private val FrostPlateLight = Color(0xFFE6E0F2)
 private val FrostPlateDark = Color(0xFF3C3850)
@@ -648,12 +651,8 @@ fun TableGrid(
     onChange: (NoteTable) -> Unit,
     onDelete: () -> Unit,
 ) {
-    val width = table.cells.maxOfOrNull { it.size } ?: 0
-    val rows = if (width == 0) {
-        emptyList()
-    } else {
-        table.cells.map { row -> List(width) { index -> row.getOrElse(index) { "" } } }
-    }
+    val rows = NoteTables.normalized(table.cells)
+    val width = rows.firstOrNull()?.size ?: 0
     val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
     val headerBg = MaterialTheme.colorScheme.surfaceVariant
     Column(
@@ -695,42 +694,20 @@ fun TableGrid(
                             val header = rowIndex == 0
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEachIndexed { colIndex, cell ->
-                                    BasicTextField(
-                                        value = cell,
-                                        onValueChange = { value ->
-                                            val next = rows.map { it.toMutableList() }
-                                            next[rowIndex][colIndex] = value.replace('\n', ' ')
-                                            onChange(table.copy(cells = next.map { it.toList() }))
-                                        },
-                                        singleLine = true,
-                                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                            fontFamily = NotesFont,
-                                            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                        ),
-                                        cursorBrush = SolidColor(NotesPurple),
-                                        modifier = Modifier
-                                            .width(colWidth)
-                                            .heightIn(min = 44.dp)
-                                            .background(if (header) headerBg else Color.Transparent)
-                                            .border(0.5.dp, border),
-                                        decorationBox = { inner ->
-                                            Box(
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp),
-                                                contentAlignment = Alignment.CenterStart,
-                                            ) {
-                                                if (cell.isEmpty() && header) {
-                                                    Text(
-                                                        "Заголовок",
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                                        fontFamily = NotesFont,
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                    )
-                                                }
-                                                inner()
-                                            }
-                                        },
-                                    )
+                                    key(rowIndex to colIndex) {
+                                        TableCellField(
+                                            value = cell,
+                                            header = header,
+                                            border = border,
+                                            headerBackground = headerBg,
+                                            onValue = { value ->
+                                                val next = rows.map { it.toMutableList() }
+                                                next[rowIndex][colIndex] = value
+                                                onChange(table.copy(cells = next.map { it.toList() }))
+                                            },
+                                            modifier = Modifier.width(colWidth),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -738,30 +715,153 @@ fun TableGrid(
                 }
             }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            TableAction("Строка", enabled = rows.size < TABLE_MAX_ROWS) {
-                val cols = width.coerceAtLeast(1)
-                onChange(table.copy(cells = rows + listOf(List(cols) { "" })))
-            }
-            TableAction("Столбец", enabled = width < TABLE_MAX_COLS) {
-                val grown = if (rows.isEmpty()) {
-                    listOf(listOf(""))
-                } else {
-                    rows.map { it + "" }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TableAction("+ Строка", enabled = rows.size < TABLE_MAX_ROWS) {
+                    onChange(table.copy(cells = NoteTables.addRow(table.cells)))
                 }
-                onChange(table.copy(cells = grown))
+                TableAction("- Строка", enabled = rows.size > 1) {
+                    onChange(table.copy(cells = NoteTables.removeRow(table.cells)))
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TableAction("+ Столбец", enabled = width < TABLE_MAX_COLS) {
+                    onChange(table.copy(cells = NoteTables.addColumn(table.cells)))
+                }
+                TableAction("- Столбец", enabled = width > 1) {
+                    onChange(table.copy(cells = NoteTables.removeColumn(table.cells)))
+                }
             }
         }
     }
 }
 
+/**
+ * Plain paragraph drawn under every table. Tapping the empty page below the
+ * table focuses this field, so the caret sits after the table instead of in
+ * the body above it. Marks stay on the body; this text is stored separately.
+ */
+@Composable
+fun TrailingNoteField(
+    text: String,
+    onText: (String) -> Unit,
+    focusRequest: Int,
+    modifier: Modifier = Modifier,
+) {
+    var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    var armed by remember { mutableStateOf(false) }
+    LaunchedEffect(text) {
+        if (text != field.text) {
+            val cursor = field.selection.end.coerceIn(0, text.length)
+            field = TextFieldValue(text, TextRange(cursor))
+        }
+    }
+    LaunchedEffect(focusRequest) {
+        if (!armed) {
+            armed = true
+            return@LaunchedEffect
+        }
+        field = field.copy(selection = TextRange(field.text.length))
+        withFrameNanos { }
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
+    BasicTextField(
+        value = field,
+        onValueChange = { next ->
+            field = next
+            if (next.text != text) onText(next.text)
+        },
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
+            color = MaterialTheme.colorScheme.onSurface,
+            fontFamily = NotesFont,
+        ),
+        cursorBrush = SolidColor(NotesPurple),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .heightIn(min = 120.dp)
+            .focusRequester(focusRequester),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxWidth().heightIn(min = 120.dp), contentAlignment = Alignment.TopStart) {
+                if (field.text.isEmpty()) {
+                    Text(
+                        "Продолжите писать…",
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                            fontFamily = NotesFont,
+                        ),
+                    )
+                }
+                inner()
+            }
+        },
+    )
+}
+
+@Composable
+private fun TableCellField(
+    value: String,
+    header: Boolean,
+    border: Color,
+    headerBackground: Color,
+    onValue: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    LaunchedEffect(value) {
+        if (value != field.text) {
+            field = TextFieldValue(value, TextRange(value.length))
+        }
+    }
+    BasicTextField(
+        value = field,
+        onValueChange = { next ->
+            val cleaned = next.text.replace('\n', ' ')
+            val selection = if (cleaned.length == next.text.length) {
+                next.selection
+            } else {
+                TextRange(cleaned.length.coerceAtMost(next.selection.end))
+            }
+            field = next.copy(text = cleaned, selection = selection)
+            if (cleaned != value) onValue(cleaned)
+        },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(
+            fontFamily = NotesFont,
+            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurface,
+        ),
+        cursorBrush = SolidColor(NotesPurple),
+        modifier = modifier
+            .heightIn(min = 44.dp)
+            .background(if (header) headerBackground else Color.Transparent)
+            .border(0.5.dp, border),
+        decorationBox = { inner ->
+            Box(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty() && header) {
+                    Text(
+                        "Заголовок",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontFamily = NotesFont,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                inner()
+            }
+        },
+    )
+}
+
 @Composable
 private fun TableAction(label: String, enabled: Boolean, onClick: () -> Unit) {
     Text(
-        "+ $label",
+        label,
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, onClick = onClick)

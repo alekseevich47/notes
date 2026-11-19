@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
 
@@ -167,8 +168,8 @@ fun TableSizeDialog(
 ) {
     var rows by remember { mutableStateOf(2) }
     var cols by remember { mutableStateOf(2) }
-    val maxRows = 8
-    val maxCols = 6
+    val maxRows = NoteTables.MAX_ROWS
+    val maxCols = NoteTables.MAX_COLS
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             modifier = Modifier

@@ -7,7 +7,9 @@ import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
+import com.alekseevich47.notes.domain.NoteDocuments
 import com.alekseevich47.notes.domain.NoteTable
+import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.player.NotePlayer
 import com.alekseevich47.notes.player.PlayerUi
 import com.alekseevich47.notes.ui.components.DayRange
@@ -101,15 +103,23 @@ class EditorViewModel @Inject constructor(
         setDocument(current.document.copy(tables = tables))
     }
 
+    fun setTrailing(trailing: String) {
+        val current = _note.value ?: return
+        if (current.document.tables.isEmpty()) return
+        setDocument(current.document.copy(trailing = trailing))
+    }
+
     fun removeTable(id: String) {
         val current = _note.value ?: return
-        setDocument(current.document.copy(tables = current.document.tables.filterNot { it.id == id }))
+        setDocument(NoteDocuments.withoutTable(current.document, id))
     }
 
     fun addTable(rows: Int, cols: Int) {
         val current = _note.value ?: return
-        val cells = List(rows) { List(cols) { "" } }
-        val table = NoteTable(id = "t-${System.currentTimeMillis()}", cells = cells)
+        val table = NoteTable(
+            id = "t-${System.currentTimeMillis()}",
+            cells = NoteTables.blank(rows, cols),
+        )
         setDocument(current.document.copy(tables = current.document.tables + table))
     }
 

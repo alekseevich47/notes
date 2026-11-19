@@ -29,6 +29,8 @@ data class NoteDocument(
     val text: String = "",
     val marks: List<TextMark> = emptyList(),
     val tables: List<NoteTable> = emptyList(),
+    /** Paragraph under the last table. Folded back into [text] when no tables remain. */
+    val trailing: String = "",
 )
 
 data class Note(
@@ -65,7 +67,28 @@ object NoteDocuments {
                 builder.append('\n')
             }
         }
+        if (document.trailing.isNotEmpty()) {
+            if (builder.isNotEmpty() && !builder.endsWith('\n')) builder.append('\n')
+            builder.append(document.trailing)
+        }
         return builder.toString()
+    }
+
+    /**
+     * Tables are attachments drawn after [NoteDocument.text]. Text typed under
+     * them lives in [NoteDocument.trailing] so the body editor's marks stay put.
+     * Deleting the last table joins that paragraph back onto the body.
+     */
+    fun withoutTable(document: NoteDocument, id: String): NoteDocument {
+        return settle(document.copy(tables = document.tables.filterNot { it.id == id }))
+    }
+
+    fun settle(document: NoteDocument): NoteDocument {
+        if (document.tables.isNotEmpty() || document.trailing.isEmpty()) return document
+        return document.copy(
+            text = joinParagraphs(document.text, document.trailing),
+            trailing = "",
+        )
     }
 
     fun searchBlob(title: String, document: NoteDocument): String {
@@ -82,10 +105,65 @@ object NoteDocuments {
                 if (chars[index] != '\n') chars[index] = '▒'
             }
         }
-        val flat = String(chars).replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
+        val flat = joinParagraphs(String(chars), document.trailing)
+            .replace('\n', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
         val clipped = if (flat.length > maxChars) flat.take(maxChars).trimEnd() + "…" else flat
         val suffix = if (document.tables.isNotEmpty()) "  ▦" else ""
         return (clipped + suffix).ifBlank { "Пустая заметка" }
+    }
+
+    private fun joinParagraphs(body: String, trailing: String): String {
+        if (trailing.isEmpty()) return body
+        if (body.isEmpty()) return trailing
+        if (body.endsWith('\n') || trailing.startsWith('\n')) return body + trailing
+        return body + "\n" + trailing
+    }
+}
+
+object NoteTables {
+    const val MAX_ROWS = 8
+    const val MAX_COLS = 6
+
+    fun blank(rows: Int, cols: Int): List<List<String>> {
+        val safeRows = rows.coerceIn(1, MAX_ROWS)
+        val safeCols = cols.coerceIn(1, MAX_COLS)
+        return List(safeRows) { List(safeCols) { "" } }
+    }
+
+    fun normalized(cells: List<List<String>>): List<List<String>> {
+        val width = cells.maxOfOrNull { it.size } ?: 0
+        if (width == 0) return emptyList()
+        return cells.map { row -> List(width) { index -> row.getOrElse(index) { "" } } }
+    }
+
+    fun addRow(cells: List<List<String>>): List<List<String>> {
+        val rows = normalized(cells)
+        if (rows.size >= MAX_ROWS) return rows
+        val cols = (rows.firstOrNull()?.size ?: 1).coerceAtLeast(1)
+        return rows + listOf(List(cols) { "" })
+    }
+
+    fun addColumn(cells: List<List<String>>): List<List<String>> {
+        val rows = normalized(cells)
+        val width = rows.firstOrNull()?.size ?: 0
+        if (width >= MAX_COLS) return rows
+        if (rows.isEmpty()) return listOf(listOf(""))
+        return rows.map { it + "" }
+    }
+
+    fun removeRow(cells: List<List<String>>): List<List<String>> {
+        val rows = normalized(cells)
+        if (rows.size <= 1) return rows
+        return rows.dropLast(1)
+    }
+
+    fun removeColumn(cells: List<List<String>>): List<List<String>> {
+        val rows = normalized(cells)
+        val width = rows.firstOrNull()?.size ?: 0
+        if (width <= 1) return rows
+        return rows.map { it.dropLast(1) }
     }
 }
 
