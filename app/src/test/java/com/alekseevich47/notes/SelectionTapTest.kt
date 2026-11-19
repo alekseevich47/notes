@@ -1,8 +1,10 @@
 package com.alekseevich47.notes
 
 import com.alekseevich47.notes.ui.editor.pointInsideSelection
+import com.alekseevich47.notes.ui.editor.pointInsideTextBounds
 import com.alekseevich47.notes.ui.editor.selectionBands
 import com.alekseevich47.notes.ui.editor.shouldClearSelectionOnUp
+import com.alekseevich47.notes.ui.editor.shouldOfferPlatformPaste
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -97,5 +99,50 @@ class SelectionTapTest {
         assertFalse(pointInsideSelection(10f, 50f, bands))
         assertFalse(pointInsideSelection(10f, 80f, bands))
         assertFalse(pointInsideSelection(10f, -4f, bands))
+    }
+
+    @Test
+    fun textBoundsIncludeTheLayoutAndExcludeTheSpaceBelow() {
+        assertTrue(pointInsideTextBounds(0f, 0f, 100f, 40f))
+        assertTrue(pointInsideTextBounds(100f, 40f, 100f, 40f))
+        assertFalse(pointInsideTextBounds(10f, 41f, 100f, 40f))
+        assertFalse(pointInsideTextBounds(-1f, 10f, 100f, 40f))
+        assertFalse(pointInsideTextBounds(10f, 10f, 0f, 40f))
+    }
+
+    @Test
+    fun platformPasteStaysCollapsedAndSelectAllNeverForwards() {
+        assertFalse(
+            shouldOfferPlatformPaste(
+                hasCopy = true,
+                hasCut = true,
+                hasPaste = true,
+                suppressPlatform = false,
+            ),
+        )
+        assertFalse(
+            shouldOfferPlatformPaste(
+                hasCopy = false,
+                hasCut = false,
+                hasPaste = false,
+                suppressPlatform = false,
+            ),
+        )
+        assertFalse(
+            shouldOfferPlatformPaste(
+                hasCopy = false,
+                hasCut = false,
+                hasPaste = true,
+                suppressPlatform = true,
+            ),
+        )
+        assertTrue(
+            shouldOfferPlatformPaste(
+                hasCopy = false,
+                hasCut = false,
+                hasPaste = true,
+                suppressPlatform = false,
+            ),
+        )
     }
 }

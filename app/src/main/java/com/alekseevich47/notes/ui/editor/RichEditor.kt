@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
@@ -118,11 +120,19 @@ internal fun RichNoteEditor(
         menuOverflow = false
         menuVisible = false
     }
+    var releasePlatformMenu by remember { mutableStateOf(false) }
     LaunchedEffect(blockMenu) {
         if (blockMenu) {
             withFrameNanos { }
             blockMenu = false
         }
+    }
+    LaunchedEffect(releasePlatformMenu) {
+        if (!releasePlatformMenu) return@LaunchedEffect
+        withFrameNanos { }
+        if (!releasePlatformMenu) return@LaunchedEffect
+        toolbar.suppressPlatform = false
+        releasePlatformMenu = false
     }
     if (pinDialogVisible) {
         prompt.dialogOpen = true
@@ -155,16 +165,22 @@ internal fun RichNoteEditor(
 
     fun collapseSelection() {
         blockMenu = true
+        toolbar.suppressPlatform = true
+        releasePlatformMenu = false
         if (!field.selection.collapsed) {
             field = field.copy(selection = TextRange(field.selection.end))
         }
+        toolbar.hide()
         hideMenu()
     }
 
     fun placeCaret(offset: Int) {
         val cursor = offset.coerceIn(0, field.text.length)
         blockMenu = true
+        toolbar.suppressPlatform = true
+        releasePlatformMenu = false
         field = field.copy(selection = TextRange(cursor))
+        toolbar.hide()
         hideMenu()
         if (
             !hiddenUnlocked &&
@@ -225,8 +241,15 @@ internal fun RichNoteEditor(
     }
 
     fun selectAll() {
+        releasePlatformMenu = false
+        if (field.text.isEmpty()) {
+            hideMenu()
+            return
+        }
+        // Primary row (cut / copy / …), not the overflow the button lives in.
+        menuOverflow = false
+        menuVisible = true
         field = field.copy(selection = TextRange(0, field.text.length))
-        hideMenu()
     }
 
     SideEffect {
@@ -262,6 +285,37 @@ internal fun RichNoteEditor(
         formats.table = onAskTable
         formats.activeStyles = stylesTouching(document.marks, field.selection)
         formats.listActive = lineNumbered(field.text, field.selection.min)
+        surface.onGestureSettle = settle@{ cleared, collapsedAtDown, root ->
+            if (cleared || !collapsedAtDown || root == null) {
+                if (cleared) {
+                    toolbar.suppressPlatform = true
+                    releasePlatformMenu = false
+                }
+                return@settle
+            }
+            val coords = textCoordinates
+            val result = layout
+            if (coords == null || !coords.isAttached || result == null) return@settle
+            val local = root - coords.localToRoot(Offset.Zero)
+            if (
+                pointInsideTextBounds(
+                    local.x,
+                    local.y,
+                    result.size.width.toFloat(),
+                    result.size.height.toFloat(),
+                )
+            ) {
+                releasePlatformMenu = true
+            }
+        }
+    }
+    toolbar.onSelectionGestureEnded = {
+        if (field.selection.collapsed) return@onSelectionGestureEnded
+        menuOverflow = false
+        menuVisible = true
+    }
+    toolbar.onSelectionGestureBegan = {
+        menuVisible = false
     }
 
     BackHandler(enabled = !field.selection.collapsed || menuVisible) {
@@ -311,11 +365,13 @@ internal fun RichNoteEditor(
                         val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end)
                         val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
                         field = next.copy(text = edit.text, selection = selection)
-                        if (selection.collapsed) {
-                            hideMenu()
-                        } else if (selection != previousSelection) {
-                            menuVisible = true
+                        if (edit.text != previous) {
+                            toolbar.suppressPlatform = false
+                            releasePlatformMenu = false
                         }
+                        // The menu waits for finger-up. Compose asks the toolbar to show only
+                        // after the selection gesture ends; showing here covers the magnifier.
+                        if (selection.collapsed) hideMenu()
                         onDocument(
                             document.copy(
                                 text = edit.text,
@@ -349,6 +405,10 @@ internal fun RichNoteEditor(
                         fontFamily = NotesFont,
                     ),
                     cursorBrush = SolidColor(NotesPurple),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        autoCorrectEnabled = true,
+                    ),
                     visualTransformation = remember(document.marks, hiddenUnlocked, dark) {
                         NoteVisual(document.marks, hiddenUnlocked, dark)
                     },
@@ -404,20 +464,27 @@ private class HiddenPromptGuard {
 }
 
 /**
- * Selection uses the in-app bubble, so the platform toolbar is hidden while
- * text is selected. A collapsed cursor still gets the platform menu (paste).
+ * Selection uses the in-app bubble. Compose shows its floating toolbar when a
+ * selection gesture ends and hides it while the finger is down, so those calls
+ * open and close the bubble. A collapsed caret may still paste. Select all is
+ * never forwarded — that is the system window after a tap on empty space.
  */
 private class RoutingTextToolbar(
     private val platform: TextToolbar,
 ) : TextToolbar {
     private var selectionMenu = false
+    var suppressPlatform = false
+    var onSelectionGestureEnded: () -> Unit = {}
+    var onSelectionGestureBegan: () -> Unit = {}
 
     override val status: TextToolbarStatus
         get() = if (selectionMenu) TextToolbarStatus.Shown else platform.status
 
     override fun hide() {
+        val gestureBegan = selectionMenu
         selectionMenu = false
         platform.hide()
+        if (gestureBegan) onSelectionGestureBegan()
     }
 
     override fun showMenu(
@@ -427,14 +494,33 @@ private class RoutingTextToolbar(
         onCutRequested: (() -> Unit)?,
         onSelectAllRequested: (() -> Unit)?,
     ) {
-        val selected = onCopyRequested != null || onCutRequested != null
-        if (selected) {
+        val ranged = onCopyRequested != null || onCutRequested != null
+        if (ranged) {
+            val gestureEnded = !selectionMenu
             selectionMenu = true
             platform.hide()
-        } else {
-            selectionMenu = false
-            platform.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested)
+            if (gestureEnded) onSelectionGestureEnded()
+            return
         }
+        selectionMenu = false
+        if (
+            !shouldOfferPlatformPaste(
+                hasCopy = false,
+                hasCut = false,
+                hasPaste = onPasteRequested != null,
+                suppressPlatform = suppressPlatform,
+            )
+        ) {
+            platform.hide()
+            return
+        }
+        platform.showMenu(
+            rect,
+            onCopyRequested = null,
+            onPasteRequested = onPasteRequested,
+            onCutRequested = null,
+            onSelectAllRequested = null,
+        )
     }
 }
 

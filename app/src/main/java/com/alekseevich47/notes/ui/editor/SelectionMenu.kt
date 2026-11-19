@@ -1,5 +1,7 @@
 package com.alekseevich47.notes.ui.editor
 
+import android.view.View
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -21,9 +23,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Rect
@@ -101,6 +106,7 @@ fun SelectionActionsPopup(
                 .clip(shape)
                 .background(plate),
         ) {
+            KeepMenuAboveHandles()
             if (overflow) {
                 OverflowMenu(
                     onHidden = onHidden,
@@ -142,6 +148,67 @@ private fun placeSelectionMenu(
     x = x.coerceIn(marginPx, maxX)
     y = y.coerceIn(marginPx, maxY)
     return IntOffset(x, y)
+}
+
+/**
+ * Selection handles are Compose popups on [WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL].
+ * Whichever popup is added last paints on top, so a handle update covers the menu.
+ * Re-add this popup above that layer once it is attached. The window stays
+ * [WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE], so handle drags outside the menu still land
+ * on the text field.
+ */
+@Composable
+private fun KeepMenuAboveHandles() {
+    val view = LocalView.current
+    val lifted = remember { booleanArrayOf(false) }
+    DisposableEffect(view) {
+        val root = view.rootView
+        val lift = Runnable {
+            if (lifted[0]) return@Runnable
+            lifted[0] = true
+            if (!liftSelectionMenuWindow(root)) lifted[0] = false
+        }
+        val listener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                v.post(lift)
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                v.removeCallbacks(lift)
+            }
+        }
+        root.addOnAttachStateChangeListener(listener)
+        if (root.isAttachedToWindow) root.post(lift)
+        onDispose {
+            root.removeOnAttachStateChangeListener(listener)
+            root.removeCallbacks(lift)
+        }
+    }
+}
+
+private fun liftSelectionMenuWindow(root: View): Boolean {
+    val params = root.layoutParams as? WindowManager.LayoutParams ?: return false
+    if (!root.isAttachedToWindow) return false
+    val above = WindowManager.LayoutParams.TYPE_APPLICATION_ABOVE_SUB_PANEL
+    if (params.type == above) return true
+    val previous = params.type
+    val windowManager = root.context.getSystemService(WindowManager::class.java) ?: return false
+    params.type = above
+    return try {
+        windowManager.removeViewImmediate(root)
+        windowManager.addView(root, params)
+        true
+    } catch (_: RuntimeException) {
+        params.type = previous
+        if (!root.isAttachedToWindow) {
+            try {
+                windowManager.addView(root, params)
+            } catch (_: RuntimeException) {
+                return false
+            }
+        }
+        false
+    }
 }
 
 @Composable

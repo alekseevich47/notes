@@ -31,6 +31,13 @@ internal class NoteSurfaceBridge {
     var pointInside: (Offset, SelectionSnapshot) -> Boolean = { _, _ -> true }
     var onClear: (Offset, SelectionSnapshot) -> Unit = { _, _ -> }
 
+    /**
+     * Finger-up on the note body. [cleared] is true when this gesture collapsed
+     * the selection. [root] is null when the body is not attached.
+     */
+    var onGestureSettle: (cleared: Boolean, collapsedAtDown: Boolean, root: Offset?) -> Unit =
+        { _, _, _ -> }
+
     private var atDown: SelectionSnapshot = SelectionSnapshot.Collapsed
 
     fun down() {
@@ -51,20 +58,17 @@ internal class NoteSurfaceBridge {
         } else {
             pointInside(root, selection)
         }
-        if (
-            !shouldClearSelectionOnUp(
-                collapsedAtDown = selection.collapsed,
-                dragDistance = dragDistance,
-                touchSlop = touchSlop,
-                elapsedMillis = elapsedMillis,
-                longPressTimeoutMillis = longPressTimeoutMillis,
-                insideSelection = inside,
-            )
-        ) {
-            return
-        }
-        val clearAt = root ?: return
-        onClear(clearAt, selection)
+        val clear = shouldClearSelectionOnUp(
+            collapsedAtDown = selection.collapsed,
+            dragDistance = dragDistance,
+            touchSlop = touchSlop,
+            elapsedMillis = elapsedMillis,
+            longPressTimeoutMillis = longPressTimeoutMillis,
+            insideSelection = inside,
+        )
+        val didClear = clear && root != null
+        if (didClear) onClear(root, selection)
+        onGestureSettle(didClear, selection.collapsed, root)
     }
 }
 
