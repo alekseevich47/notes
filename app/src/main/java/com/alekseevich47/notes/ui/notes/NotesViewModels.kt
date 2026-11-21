@@ -5,11 +5,12 @@ import androidx.lifecycle.viewModelScope
 import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
+import com.alekseevich47.notes.domain.BlockKind
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteDocuments
 import com.alekseevich47.notes.domain.NoteTable
-import com.alekseevich47.notes.domain.NoteTables
+import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.player.NotePlayer
 import com.alekseevich47.notes.player.PlayerUi
 import com.alekseevich47.notes.ui.components.DayRange
@@ -59,6 +60,13 @@ class NotesViewModel @Inject constructor(
     fun delete(id: Long) {
         viewModelScope.launch { repository.delete(id) }
     }
+
+    fun deleteMany(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.forEach { repository.delete(it) }
+        }
+    }
 }
 
 @HiltViewModel
@@ -77,9 +85,10 @@ class EditorViewModel @Inject constructor(
     private var saveJob: kotlinx.coroutines.Job? = null
 
     fun bind(id: Long) {
+        // Activity-scoped: leaving and opening the same note must ask for the PIN again.
+        _unlocked.value = false
         if (boundId == id && _note.value != null) return
         boundId = id
-        _unlocked.value = false
         viewModelScope.launch {
             _note.value = repository.get(id)
         }
@@ -87,26 +96,34 @@ class EditorViewModel @Inject constructor(
 
     fun setTitle(title: String) {
         val current = _note.value ?: return
-        _note.value = current.copy(title = title)
+        if (current.title == title) return
+        _note.value = current.copy(title = title, updatedAt = System.currentTimeMillis())
         scheduleSave()
     }
 
     fun setDocument(document: NoteDocument) {
         val current = _note.value ?: return
-        _note.value = current.copy(document = document)
+        if (current.document == document) return
+        _note.value = current.copy(document = document, updatedAt = System.currentTimeMillis())
         scheduleSave()
+    }
+
+    fun setBlockText(index: Int, text: String, marks: List<TextMark>) {
+        val current = _note.value ?: return
+        val blocks = NoteDocuments.flow(current.document).toMutableList()
+        val block = blocks.getOrNull(index) ?: return
+        if (block.kind != BlockKind.TEXT) return
+        if (block.text == text && block.marks == marks) return
+        blocks[index] = block.copy(text = text, marks = marks)
+        setDocument(NoteDocuments.pack(blocks))
     }
 
     fun updateTable(table: NoteTable) {
         val current = _note.value ?: return
-        val tables = current.document.tables.map { if (it.id == table.id) table else it }
-        setDocument(current.document.copy(tables = tables))
-    }
-
-    fun setTrailing(trailing: String) {
-        val current = _note.value ?: return
-        if (current.document.tables.isEmpty()) return
-        setDocument(current.document.copy(trailing = trailing))
+        val blocks = NoteDocuments.flow(current.document).map { block ->
+            if (block.table?.id == table.id) block.copy(table = table) else block
+        }
+        setDocument(NoteDocuments.pack(blocks))
     }
 
     fun removeTable(id: String) {
@@ -114,41 +131,29 @@ class EditorViewModel @Inject constructor(
         setDocument(NoteDocuments.withoutTable(current.document, id))
     }
 
-    fun addTable(rows: Int, cols: Int) {
+    fun addTable(rows: Int, cols: Int, blockIndex: Int, cursor: Int) {
         val current = _note.value ?: return
-        val table = NoteTable(
-            id = "t-${System.currentTimeMillis()}",
-            cells = NoteTables.blank(rows, cols),
-        )
-        setDocument(current.document.copy(tables = current.document.tables + table))
+        val tableId = "t-${System.currentTimeMillis()}"
+        setDocument(NoteDocuments.insertTable(current.document, blockIndex, cursor, rows, cols, tableId))
     }
 
     fun unlock(pin: String): PinResult {
-        if (PinHasher.isServiceReset(pin)) {
-            settings.setPinHash(null)
-            _unlocked.value = true
-            return PinResult.RESET
+        return when (EditorPins.check(pin, settings.pinHash.value)) {
+            EditorPinCheck.OK -> {
+                _unlocked.value = true
+                PinResult.OK
+            }
+            EditorPinCheck.WRONG -> PinResult.WRONG
+            EditorPinCheck.MISSING -> PinResult.MISSING
         }
-        val hash = settings.pinHash.value
-        if (hash.isNullOrBlank()) return PinResult.MISSING
-        if (PinHasher.matches(pin, hash)) {
-            _unlocked.value = true
-            return PinResult.OK
-        }
-        return PinResult.WRONG
     }
 
     /**
      * Create-PIN step used when hidden text is opened before a PIN exists.
-     * Both entries are checked; a service-reset code clears storage and unlocks.
+     * 4757 is stored like any other four digits. Reset stays in Settings.
      */
     fun saveCreatedPin(first: String, second: String): PinSetup {
-        if (PinHasher.isServiceReset(first) || PinHasher.isServiceReset(second)) {
-            settings.setPinHash(null)
-            _unlocked.value = true
-            return PinSetup.RESET
-        }
-        if (first.length != 4 || first != second) return PinSetup.MISMATCH
+        if (first.length != 4 || first != second || first.any { it !in '0'..'9' }) return PinSetup.MISMATCH
         settings.setPinHash(PinHasher.hash(first))
         _unlocked.value = true
         return PinSetup.SAVED
@@ -171,17 +176,12 @@ class EditorViewModel @Inject constructor(
     }
 
     fun close(onDone: () -> Unit) {
+        _unlocked.value = false
+        saveJob?.cancel()
         viewModelScope.launch {
             val snapshot = _note.value
             if (snapshot != null) {
-                val doc = snapshot.document
-                val pristine = snapshot.audioPath == null &&
-                    doc.text.isBlank() &&
-                    doc.trailing.isBlank() &&
-                    doc.tables.isEmpty() &&
-                    doc.marks.isEmpty() &&
-                    snapshot.title == "Заметка #${snapshot.seq}"
-                if (pristine) repository.delete(snapshot.id) else repository.save(snapshot)
+                if (isPristine(snapshot)) repository.delete(snapshot.id) else repository.save(snapshot)
             }
             onDone()
         }
@@ -200,14 +200,18 @@ class EditorViewModel @Inject constructor(
 
     suspend fun abandonIfEmpty() {
         val snapshot = _note.value ?: return
-        val doc = snapshot.document
-        val pristine = snapshot.audioPath == null &&
-            doc.text.isBlank() &&
-            doc.trailing.isBlank() &&
-            doc.tables.isEmpty() &&
-            doc.marks.isEmpty() &&
-            snapshot.title == "Заметка #${snapshot.seq}"
-        if (pristine) repository.delete(snapshot.id)
+        if (isPristine(snapshot)) repository.delete(snapshot.id)
+    }
+
+    private fun isPristine(snapshot: Note): Boolean {
+        if (snapshot.audioPath != null) return false
+        if (snapshot.title != "Заметка #${snapshot.seq}") return false
+        val blocks = NoteDocuments.flow(snapshot.document)
+        val noTables = blocks.none { it.kind == BlockKind.TABLE }
+        val noText = blocks.all { block ->
+            block.kind != BlockKind.TEXT || (block.text.isBlank() && block.marks.isEmpty())
+        }
+        return noTables && noText
     }
 
     enum class PinResult { OK, WRONG, RESET, MISSING }

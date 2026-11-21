@@ -1,7 +1,11 @@
 package com.alekseevich47.notes.ui.notes
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,22 +25,34 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocuments
+import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.DayRange
 import com.alekseevich47.notes.ui.components.LiquidGlassPlate
 import com.alekseevich47.notes.ui.components.formatDay
+import com.alekseevich47.notes.ui.editor.SpoilerPreview
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesMuted
 import com.alekseevich47.notes.ui.theme.NotesPurple
@@ -57,8 +73,18 @@ fun NotesListScreen(
     onClearRange: () -> Unit,
     onOpen: (Long) -> Unit,
     onCreate: () -> Unit,
+    onDeleteSelected: (Set<Long>) -> Unit = {},
+    bottomInset: Dp = 0.dp,
     modifier: Modifier = Modifier,
 ) {
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(setOf<Long>()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    BackHandler(enabled = selecting) {
+        selecting = false
+        selected = emptySet()
+    }
+    val fabBottom by animateDpAsState(134.dp + bottomInset, tween(240), label = "list-fab")
     Box(modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -66,7 +92,27 @@ fun NotesListScreen(
                 .padding(horizontal = 20.dp),
         ) {
             Spacer(Modifier.height(18.dp))
-            Text("Заметки", style = MaterialTheme.typography.displaySmall, fontFamily = NotesFont)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                if (selecting) {
+                    IconButton(onClick = {
+                        selecting = false
+                        selected = emptySet()
+                    }) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Отменить выбор")
+                    }
+                }
+                Text(
+                    "Заметки",
+                    style = MaterialTheme.typography.displaySmall,
+                    fontFamily = NotesFont,
+                    modifier = Modifier.weight(1f),
+                )
+                if (selecting) {
+                    IconButton(onClick = { if (selected.isNotEmpty()) confirmDelete = true }) {
+                        Icon(Icons.Outlined.Delete, contentDescription = "Удалить", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SearchField(
@@ -111,11 +157,26 @@ fun NotesListScreen(
                 }
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp + bottomInset),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(notes, key = { it.id }) { note ->
-                        NoteCard(note, onClick = { onOpen(note.id) })
+                        NoteCard(
+                            note = note,
+                            selecting = selecting,
+                            checked = note.id in selected,
+                            onClick = {
+                                if (selecting) {
+                                    selected = if (note.id in selected) selected - note.id else selected + note.id
+                                } else {
+                                    onOpen(note.id)
+                                }
+                            },
+                            onLongClick = {
+                                selecting = true
+                                selected = selected + note.id
+                            },
+                        )
                     }
                 }
             }
@@ -124,7 +185,7 @@ fun NotesListScreen(
             hazeState = hazeState,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 22.dp, bottom = 134.dp)
+                .padding(end = 22.dp, bottom = fabBottom)
                 .size(60.dp),
             shape = CircleShape,
             elevation = 10.dp,
@@ -137,6 +198,22 @@ fun NotesListScreen(
             ) {
                 Icon(Icons.Outlined.Add, contentDescription = "Новая заметка", tint = NotesPurple)
             }
+        }
+        if (confirmDelete) {
+            AppDialog(
+                title = if (selected.size == 1) "Удалить заметку?" else "Удалить заметки?",
+                body = "Аудио тоже будет удалено с устройства.",
+                confirm = "Удалить",
+                destructive = true,
+                onConfirm = {
+                    val ids = selected
+                    confirmDelete = false
+                    selecting = false
+                    selected = emptySet()
+                    onDeleteSelected(ids)
+                },
+                onDismiss = { confirmDelete = false },
+            )
         }
     }
 }
@@ -175,21 +252,37 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modi
 }
 
 @Composable
-private fun NoteCard(note: Note, onClick: () -> Unit) {
-    Column(
+private fun NoteCard(
+    note: Note,
+    selecting: Boolean,
+    checked: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .clickable(onClick = onClick)
+            .pointerInput(selecting) {
+                detectTapGestures(onTap = { onClick() }, onLongPress = { onLongClick() })
+            }
             .padding(horizontal = 4.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top,
     ) {
+        if (selecting) {
+            Checkbox(
+                checked = checked,
+                onCheckedChange = { onClick() },
+                colors = CheckboxDefaults.colors(checkedColor = NotesPurple),
+                modifier = Modifier.padding(end = 4.dp),
+            )
+        }
+        Column(Modifier.weight(1f)) {
         Text(note.title, style = MaterialTheme.typography.titleMedium, fontFamily = NotesFont, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(
-            NoteDocuments.preview(note.document),
-            style = MaterialTheme.typography.bodyMedium,
+        SpoilerPreview(
+            parts = NoteDocuments.previewParts(note.document),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = NotesFont),
             modifier = Modifier.padding(top = 4.dp),
         )
         Text(
@@ -198,6 +291,7 @@ private fun NoteCard(note: Note, onClick: () -> Unit) {
             color = NotesMuted,
             modifier = Modifier.padding(top = 6.dp),
         )
+        }
     }
 }
 

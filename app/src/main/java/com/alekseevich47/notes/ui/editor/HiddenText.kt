@@ -8,6 +8,42 @@ import com.alekseevich47.notes.domain.TextMark
  * change them are rejected until the PIN dialog unlocks the note.
  */
 object HiddenText {
+    /**
+     * Fake text-shadow samples, in dp, around the glyphs. The real fill stays
+     * transparent; these low-alpha copies stand in for `text-shadow: 0 0 20px`.
+     */
+    val shadowOffsetsDp: List<Pair<Float, Float>> = listOf(
+        0f to 0f,
+        2.4f to 0f,
+        -2.4f to 0f,
+        0f to 2.4f,
+        0f to -2.4f,
+        1.8f to 1.8f,
+        -1.8f to 1.8f,
+        1.8f to -1.8f,
+        -1.8f to -1.8f,
+        4.6f to 0.4f,
+        -4.6f to -0.4f,
+        0.4f to 4.6f,
+        -0.8f to -4.6f,
+    )
+
+    val shadowAlphas: List<Float> = listOf(
+        0.22f,
+        0.14f,
+        0.14f,
+        0.14f,
+        0.14f,
+        0.12f,
+        0.12f,
+        0.12f,
+        0.12f,
+        0.08f,
+        0.08f,
+        0.08f,
+        0.08f,
+    )
+
     fun editTouches(marks: List<TextMark>, before: String, after: String): Boolean {
         if (before == after) return false
         val prefix = sharedPrefix(before, after)

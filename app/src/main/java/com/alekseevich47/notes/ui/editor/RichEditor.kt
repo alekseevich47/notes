@@ -79,11 +79,6 @@ import com.alekseevich47.notes.ui.theme.NotesPurple
 import kotlin.math.max
 import kotlin.math.min
 
-private const val TABLE_MAX_ROWS = NoteTables.MAX_ROWS
-private const val TABLE_MAX_COLS = NoteTables.MAX_COLS
-
-private val FrostPlateLight = Color(0xFFE6E0F2)
-private val FrostPlateDark = Color(0xFF3C3850)
 private val numberedLine = Regex("""^\d+\.\s?.*""")
 
 @Composable
@@ -99,6 +94,9 @@ internal fun RichNoteEditor(
     pinDialogVisible: Boolean,
     surface: NoteSurfaceBridge,
     modifier: Modifier = Modifier,
+    blockIndex: Int = 0,
+    placeholder: String = "Начните писать…",
+    onFocused: (Boolean) -> Unit = {},
 ) {
     var field by remember {
         mutableStateOf(TextFieldValue(document.text, TextRange(document.text.length)))
@@ -112,8 +110,7 @@ internal fun RichNoteEditor(
     val clipboard = LocalClipboardManager.current
     val platformToolbar = LocalTextToolbar.current
     val toolbar = remember { RoutingTextToolbar(platformToolbar) }
-    val background = MaterialTheme.colorScheme.background
-    val dark = (0.2126f * background.red + 0.7152f * background.green + 0.0722f * background.blue) < 0.4f
+    val ink = MaterialTheme.colorScheme.onSurface
     val censorLayout = layout
     val censor = !hiddenUnlocked && document.marks.any { it.style == MarkStyle.HIDDEN }
     if (field.selection.collapsed && (menuOverflow || menuVisible)) {
@@ -121,6 +118,7 @@ internal fun RichNoteEditor(
         menuVisible = false
     }
     var releasePlatformMenu by remember { mutableStateOf(false) }
+    var blockFocused by remember { mutableStateOf(false) }
     LaunchedEffect(blockMenu) {
         if (blockMenu) {
             withFrameNanos { }
@@ -276,15 +274,21 @@ internal fun RichNoteEditor(
                 placeCaret(result.getOffsetForPosition(local))
             }
         }
-        formats.bold = { applyMark(MarkStyle.BOLD) }
-        formats.italic = { applyMark(MarkStyle.ITALIC) }
-        formats.underline = { applyMark(MarkStyle.UNDERLINE) }
-        formats.strike = { applyMark(MarkStyle.STRIKE) }
-        formats.hidden = { applyMark(MarkStyle.HIDDEN) }
-        formats.list = { toggleList() }
-        formats.table = onAskTable
-        formats.activeStyles = stylesTouching(document.marks, field.selection)
-        formats.listActive = lineNumbered(field.text, field.selection.min)
+        if (blockFocused && !formats.editingCell) {
+            formats.bold = { applyMark(MarkStyle.BOLD) }
+            formats.italic = { applyMark(MarkStyle.ITALIC) }
+            formats.underline = { applyMark(MarkStyle.UNDERLINE) }
+            formats.strike = { applyMark(MarkStyle.STRIKE) }
+            formats.hidden = { applyMark(MarkStyle.HIDDEN) }
+            formats.list = { toggleList() }
+            formats.table = {
+                formats.tableBlock = blockIndex
+                formats.tableCursor = field.selection.end
+                onAskTable()
+            }
+            formats.activeStyles = stylesTouching(document.marks, field.selection)
+            formats.listActive = lineNumbered(field.text, field.selection.min)
+        }
         surface.onGestureSettle = settle@{ cleared, collapsedAtDown, root ->
             if (cleared || !collapsedAtDown || root == null) {
                 if (cleared) {
@@ -324,18 +328,6 @@ internal fun RichNoteEditor(
     }
 
     Column(modifier.fillMaxWidth()) {
-        if (censor) {
-            Text(
-                "Открыть скрытый текст",
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = { requestUnlock() })
-                    .padding(bottom = 6.dp),
-                color = NotesPurple,
-                fontFamily = NotesFont,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
         Box(Modifier.fillMaxWidth()) {
             CompositionLocalProvider(LocalTextToolbar provides toolbar) {
                 BasicTextField(
@@ -394,12 +386,21 @@ internal fun RichNoteEditor(
                         .fillMaxWidth()
                         .onGloballyPositioned { textCoordinates = it }
                         .focusRequester(focusRequester)
-                        .onFocusChanged { formats.bodyFocused = it.isFocused }
-                        .drawWithContent {
-                            drawContent()
-                            if (censor && censorLayout != null) {
-                                drawHiddenFrost(censorLayout, document.marks, dark)
+                        .onFocusChanged {
+                            blockFocused = it.isFocused
+                            if (it.isFocused) {
+                                formats.bodyFocused = true
+                                formats.editingCell = false
+                            } else {
+                                formats.bodyFocused = false
                             }
+                            onFocused(it.isFocused)
+                        }
+                        .drawWithContent {
+                            if (censor && censorLayout != null) {
+                                drawSpoilerShadows(censorLayout, document.marks, ink)
+                            }
+                            drawContent()
                         },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = MaterialTheme.colorScheme.onSurface,
@@ -410,14 +411,14 @@ internal fun RichNoteEditor(
                         capitalization = KeyboardCapitalization.Sentences,
                         autoCorrectEnabled = true,
                     ),
-                    visualTransformation = remember(document.marks, hiddenUnlocked, dark) {
-                        NoteVisual(document.marks, hiddenUnlocked, dark)
+                    visualTransformation = remember(document.marks, hiddenUnlocked) {
+                        NoteVisual(document.marks, hiddenUnlocked)
                     },
                     decorationBox = { inner ->
                         Box(Modifier.fillMaxWidth()) {
-                            if (field.text.isEmpty()) {
+                            if (field.text.isEmpty() && placeholder.isNotEmpty()) {
                                 Text(
-                                    "Начните писать…",
+                                    placeholder,
                                     style = MaterialTheme.typography.bodyLarge.copy(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
                                         fontFamily = NotesFont,
@@ -470,7 +471,7 @@ private class HiddenPromptGuard {
  * open and close the bubble. A collapsed caret may still paste. Select all is
  * never forwarded — that is the system window after a tap on empty space.
  */
-private class RoutingTextToolbar(
+internal class RoutingTextToolbar(
     private val platform: TextToolbar,
 ) : TextToolbar {
     private var selectionMenu = false
@@ -569,7 +570,6 @@ private fun lineNumbered(text: String, cursor: Int): Boolean {
 private class NoteVisual(
     private val marks: List<TextMark>,
     private val unlocked: Boolean,
-    private val dark: Boolean,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val styled = buildAnnotatedString {
@@ -578,250 +578,26 @@ private class NoteVisual(
                 val start = mark.start.coerceIn(0, length)
                 val end = mark.end.coerceIn(0, length)
                 if (end <= start) return@forEach
-                addStyle(styleFor(mark.style, unlocked, dark), start, end)
+                val style = styleFor(mark.style, unlocked) ?: return@forEach
+                addStyle(style, start, end)
             }
         }
         return TransformedText(styled, OffsetMapping.Identity)
     }
 }
 
-private fun styleFor(style: MarkStyle, unlocked: Boolean, dark: Boolean): SpanStyle = when (style) {
+private fun styleFor(style: MarkStyle, unlocked: Boolean): SpanStyle? = when (style) {
     MarkStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
     MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
     MarkStyle.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
     MarkStyle.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
     MarkStyle.HIDDEN -> if (unlocked) {
-        SpanStyle(background = NotesPurple.copy(alpha = 0.18f), textDecoration = TextDecoration.Underline)
+        null
     } else {
-        val plate = if (dark) FrostPlateDark else FrostPlateLight
-        SpanStyle(color = plate, background = plate)
+        SpanStyle(color = Color.Transparent)
     }
 }
 
-/**
- * Locked hidden text is painted the same colour as the plate (glyphs never show)
- * and covered with layered soft streaks. No AGSL and no RenderEffect — those break
- * compositing on Tecno.
- */
-private fun DrawScope.drawHiddenFrost(layout: TextLayoutResult, marks: List<TextMark>, dark: Boolean) {
-    val textLength = layout.layoutInput.text.length
-    if (textLength == 0) return
-    val radius = 6.dp.toPx()
-    val padX = 1.5.dp.toPx()
-    val padY = 1.dp.toPx()
-    val tile = 3.dp.toPx()
-    val streak = 2.5.dp.toPx()
-    marks.filter { it.style == MarkStyle.HIDDEN }.forEach { mark ->
-        val start = mark.start.coerceIn(0, textLength)
-        val end = mark.end.coerceIn(0, textLength)
-        if (end <= start) return@forEach
-        val last = (end - 1).coerceAtMost(textLength - 1)
-        val startLine = layout.getLineForOffset(start.coerceAtMost(last))
-        val endLine = layout.getLineForOffset(last)
-        for (line in startLine..endLine) {
-            val from = max(start, layout.getLineStart(line))
-            val to = min(end, layout.getLineEnd(line, visibleEnd = true))
-            if (to <= from) continue
-            val left = layout.getHorizontalPosition(from, true)
-            val right = layout.getHorizontalPosition(to, true)
-            val barLeft = min(left, right) - padX
-            val barRight = max(left, right) + padX
-            if (barRight - barLeft < 1f) continue
-            val top = layout.getLineTop(line) - padY
-            val bottom = layout.getLineBottom(line) + padY
-            if (bottom - top < 1f) continue
-            val path = Path().apply {
-                addRoundRect(
-                    RoundRect(
-                        left = barLeft,
-                        top = top,
-                        right = barRight,
-                        bottom = bottom,
-                        cornerRadius = CornerRadius(radius, radius),
-                    ),
-                )
-            }
-            clipPath(path) {
-                drawRect(
-                    color = if (dark) FrostPlateDark else FrostPlateLight,
-                    topLeft = Offset(barLeft, top),
-                    size = Size(barRight - barLeft, bottom - top),
-                )
-                var y = top
-                var row = 0
-                while (y < bottom - 0.4f) {
-                    val height = min(streak, bottom - y)
-                    drawRect(
-                        color = frostStreak(row, line, dark),
-                        topLeft = Offset(barLeft, y),
-                        size = Size(barRight - barLeft, height),
-                    )
-                    y += streak
-                    row++
-                }
-                y = top
-                row = 0
-                while (y < bottom - 0.4f) {
-                    val height = min(tile, bottom - y)
-                    var x = barLeft
-                    var column = 0
-                    while (x < barRight - 0.4f) {
-                        val width = min(tile, barRight - x)
-                        drawRect(
-                            color = frostSpeck(row, column, line, dark),
-                            topLeft = Offset(x, y),
-                            size = Size(width, height),
-                        )
-                        x += tile
-                        column++
-                    }
-                    y += tile
-                    row++
-                }
-                val band = bottom - top
-                drawRect(
-                    color = Color.White.copy(alpha = if (dark) 0.10f else 0.34f),
-                    topLeft = Offset(barLeft, top),
-                    size = Size(barRight - barLeft, band * 0.42f),
-                )
-                drawRect(
-                    color = (if (dark) Color(0xFF120E1C) else Color(0xFF6A6280)).copy(alpha = if (dark) 0.16f else 0.07f),
-                    topLeft = Offset(barLeft, top + band * 0.58f),
-                    size = Size(barRight - barLeft, band * 0.42f),
-                )
-            }
-        }
-    }
-}
-
-private fun frostStreak(row: Int, line: Int, dark: Boolean): Color {
-    val light = arrayOf(
-        Color(0x88F7F4FC),
-        Color(0x66D5CEE6),
-        Color(0x55F1ECF8),
-        Color(0x77C8C0D8),
-    )
-    val night = arrayOf(
-        Color(0x88524C68),
-        Color(0x66342F44),
-        Color(0x775A5470),
-        Color(0x552C2838),
-    )
-    val palette = if (dark) night else light
-    val mixed = (row * 3 + line * 5) and 0x7fffffff
-    return palette[mixed % palette.size]
-}
-
-private fun frostSpeck(row: Int, column: Int, line: Int, dark: Boolean): Color {
-    val light = arrayOf(
-        Color(0x55FFFFFF),
-        Color(0x38C8C0D6),
-        Color(0x22F8F5FC),
-        Color(0x40B5ADC6),
-        Color(0x30FFFFFF),
-    )
-    val night = arrayOf(
-        Color(0x44706888),
-        Color(0x33241F34),
-        Color(0x285E5874),
-        Color(0x447C7592),
-        Color(0x22161022),
-    )
-    val palette = if (dark) night else light
-    val mixed = (row * 13 + column * 7 + line * 3 + (row xor column)) and 0x7fffffff
-    return palette[mixed % palette.size]
-}
-
-@Composable
-fun TableGrid(
-    table: NoteTable,
-    onChange: (NoteTable) -> Unit,
-    onDelete: () -> Unit,
-) {
-    val rows = NoteTables.normalized(table.cells)
-    val width = rows.firstOrNull()?.size ?: 0
-    val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
-    val headerBg = MaterialTheme.colorScheme.surfaceVariant
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, border, RoundedCornerShape(16.dp)),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                if (width == 0) "Таблица" else "Таблица  ${rows.size} × $width",
-                fontFamily = NotesFont,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                "Удалить",
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable(onClick = onDelete)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                fontFamily = NotesFont,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (rows.isNotEmpty()) {
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val minCol = 112.dp
-                val colWidth = if (minCol * width <= maxWidth) maxWidth / width else minCol
-                Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    Column(Modifier.width(colWidth * width)) {
-                        rows.forEachIndexed { rowIndex, row ->
-                            val header = rowIndex == 0
-                            Row(Modifier.fillMaxWidth()) {
-                                row.forEachIndexed { colIndex, cell ->
-                                    key(rowIndex to colIndex) {
-                                        TableCellField(
-                                            value = cell,
-                                            header = header,
-                                            border = border,
-                                            headerBackground = headerBg,
-                                            onValue = { value ->
-                                                val next = rows.map { it.toMutableList() }
-                                                next[rowIndex][colIndex] = value
-                                                onChange(table.copy(cells = next.map { it.toList() }))
-                                            },
-                                            modifier = Modifier.width(colWidth),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TableAction("+ Строка", enabled = rows.size < TABLE_MAX_ROWS) {
-                    onChange(table.copy(cells = NoteTables.addRow(table.cells)))
-                }
-                TableAction("- Строка", enabled = rows.size > 1) {
-                    onChange(table.copy(cells = NoteTables.removeRow(table.cells)))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TableAction("+ Столбец", enabled = width < TABLE_MAX_COLS) {
-                    onChange(table.copy(cells = NoteTables.addColumn(table.cells)))
-                }
-                TableAction("- Столбец", enabled = width > 1) {
-                    onChange(table.copy(cells = NoteTables.removeColumn(table.cells)))
-                }
-            }
-        }
-    }
-}
 
 /**
  * Plain paragraph drawn under every table. Tapping the empty page below the
@@ -889,79 +665,5 @@ fun TrailingNoteField(
                 inner()
             }
         },
-    )
-}
-
-@Composable
-private fun TableCellField(
-    value: String,
-    header: Boolean,
-    border: Color,
-    headerBackground: Color,
-    onValue: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
-    LaunchedEffect(value) {
-        if (value != field.text) {
-            field = TextFieldValue(value, TextRange(value.length))
-        }
-    }
-    BasicTextField(
-        value = field,
-        onValueChange = { next ->
-            val cleaned = next.text.replace('\n', ' ')
-            val selection = if (cleaned.length == next.text.length) {
-                next.selection
-            } else {
-                TextRange(cleaned.length.coerceAtMost(next.selection.end))
-            }
-            field = next.copy(text = cleaned, selection = selection)
-            if (cleaned != value) onValue(cleaned)
-        },
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium.copy(
-            fontFamily = NotesFont,
-            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
-            color = MaterialTheme.colorScheme.onSurface,
-        ),
-        cursorBrush = SolidColor(NotesPurple),
-        keyboardOptions = KeyboardOptions(
-            capitalization = KeyboardCapitalization.Sentences,
-            autoCorrectEnabled = true,
-        ),
-        modifier = modifier
-            .heightIn(min = 44.dp)
-            .background(if (header) headerBackground else Color.Transparent)
-            .border(0.5.dp, border),
-        decorationBox = { inner ->
-            Box(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (value.isEmpty() && header) {
-                    Text(
-                        "Заголовок",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        fontFamily = NotesFont,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                inner()
-            }
-        },
-    )
-}
-
-@Composable
-private fun TableAction(label: String, enabled: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        fontFamily = NotesFont,
-        color = if (enabled) NotesPurple else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
     )
 }
