@@ -91,7 +91,9 @@ fun SettingsScreen(
         ) {
             Text(
                 SettingsCopy.WARMUP_TITLE,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (warmup) Modifier.clickable(onClick = viewModel::openWarmupPowerSettings) else Modifier),
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = NotesFont,
             )
@@ -103,6 +105,9 @@ fun SettingsScreen(
         }
         Text(
             SettingsCopy.WARMUP_SUBTITLE,
+            modifier = Modifier.then(
+                if (warmup) Modifier.clickable(onClick = viewModel::openWarmupPowerSettings) else Modifier,
+            ),
             fontFamily = NotesFont,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,

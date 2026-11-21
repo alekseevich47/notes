@@ -10,6 +10,7 @@ import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.ThemeMode
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.ModelWarmupService
+import com.alekseevich47.notes.service.OemPowerSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.StateFlow
@@ -37,7 +38,17 @@ class SettingsViewModel @Inject constructor(
     fun setWarmupOnBoot(enabled: Boolean) {
         settings.setWarmupOnBoot(enabled)
         AppLog.i(TAG, if (enabled) "warmup on" else "warmup off")
-        if (enabled) ModelWarmupService.start(context) else ModelWarmupService.stop(context)
+        if (enabled) {
+            ModelWarmupService.start(context)
+            OemPowerSettings.open(context)
+        } else {
+            ModelWarmupService.stop(context)
+        }
+    }
+
+    /** Opens battery or OEM autostart. Does not change the switch. */
+    fun openWarmupPowerSettings() {
+        OemPowerSettings.open(context)
     }
 
     fun setRecognizer(value: String) {
