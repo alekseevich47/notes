@@ -1,10 +1,14 @@
 package com.alekseevich47.notes.ui
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.MaterialTheme
@@ -13,11 +17,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
@@ -27,10 +36,12 @@ import com.alekseevich47.notes.ui.components.DateRangeModal
 import com.alekseevich47.notes.ui.components.GlassBottomBar
 import com.alekseevich47.notes.ui.components.ShellTab
 import com.alekseevich47.notes.ui.components.ToastHost
+import com.alekseevich47.notes.service.PlaybackService
 import com.alekseevich47.notes.ui.notes.EditorScreen
 import com.alekseevich47.notes.ui.notes.EditorViewModel
 import com.alekseevich47.notes.ui.notes.NotesListScreen
 import com.alekseevich47.notes.ui.notes.NotesViewModel
+import com.alekseevich47.notes.ui.player.StickyPlayer
 import com.alekseevich47.notes.ui.record.RecordSheet
 import com.alekseevich47.notes.ui.settings.SettingsScreen
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -61,6 +72,13 @@ fun NotesRoot(
     val notes by notesVm.notes.collectAsState()
     val query by notesVm.search.collectAsState()
     val range by notesVm.dateRange.collectAsState()
+    val playback by editorVm.playerUi.collectAsState()
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    var stickyPx by remember { mutableIntStateOf(0) }
+    val showSticky = ui.screen != Screen.EDITOR && playback.engaged && playback.noteId != null
+    val insetTarget = if (showSticky) with(density) { stickyPx.toDp() } + 8.dp else 0.dp
+    val listInset by animateDpAsState(insetTarget, tween(240), label = "sticky-inset")
     val hazeState = remember { HazeState() }
     var showCalendar by remember { mutableStateOf(false) }
     var openedDone by remember { mutableStateOf<Long?>(null) }
@@ -135,6 +153,15 @@ fun NotesRoot(
                         onClearRange = { notesVm.setRange(null) },
                         onOpen = shell::openEditor,
                         onCreate = shell::createManual,
+                        onDeleteSelected = { ids ->
+                            if (playback.noteId != null && playback.noteId in ids) {
+                                context.startService(
+                                    Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_STOP),
+                                )
+                            }
+                            notesVm.deleteMany(ids)
+                        },
+                        bottomInset = listInset,
                         modifier = Modifier.statusBarsPadding(),
                     )
                     Screen.SETTINGS -> SettingsScreen(
@@ -159,6 +186,27 @@ fun NotesRoot(
                     phase = phase,
                     text = live,
                     modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (showSticky) {
+                StickyPlayer(
+                    state = playback,
+                    onToggle = {
+                        context.startService(
+                            Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_TOGGLE),
+                        )
+                    },
+                    onSeek = editorVm.player::seekFraction,
+                    onDismiss = {
+                        context.startService(
+                            Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_STOP),
+                        )
+                    },
+                    modifier = Modifier
+                        .align(androidx.compose.ui.Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 104.dp)
+                        .onSizeChanged { stickyPx = it.height },
                 )
             }
             if (ui.screen != Screen.EDITOR) {
