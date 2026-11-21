@@ -110,6 +110,7 @@ fun MicButton(
     )
     val plate = MaterialTheme.colorScheme.surface
     val ink = MaterialTheme.colorScheme.onSurface
+    val idleInk = MaterialTheme.colorScheme.onSurfaceVariant
     Box(
         modifier = modifier
             .shadow(
@@ -149,7 +150,7 @@ fun MicButton(
                         clipPath(glyph.inner) {
                             drawIdleWave(glyph.body, wave)
                         }
-                        drawOutlineMic(glyph, ink)
+                        drawOutlineMic(glyph, idleInk)
                     }
                     MicPhase.RECORDING -> {
                         clipPath(glyph.inner) {
@@ -158,13 +159,20 @@ fun MicButton(
                         drawOutlineMic(glyph, ink)
                     }
                     MicPhase.PROCESSING -> {
-                        val centers = listOf(size.width / 2f - 16f, size.width / 2f, size.width / 2f + 16f)
+                        // About 1.9× the old 4.2px discs, spaced so the discs do not meet.
+                        val dotRadius = 8f
+                        val dotSpread = 22f
+                        val centers = listOf(
+                            size.width / 2f - dotSpread,
+                            size.width / 2f,
+                            size.width / 2f + dotSpread,
+                        )
                         centers.forEachIndexed { index, x ->
                             val phaseShift = (bounce + index * 0.18f) % 1f
                             val lift = sin(phaseShift * PI).toFloat() * 8f
                             drawCircle(
                                 color = NotesPurple,
-                                radius = 4.2f,
+                                radius = dotRadius,
                                 center = Offset(x, size.height / 2f - lift),
                             )
                         }
