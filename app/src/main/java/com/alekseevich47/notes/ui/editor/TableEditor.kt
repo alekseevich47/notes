@@ -328,6 +328,14 @@ fun TableBlock(
                                     var col = 0
                                     while (col < width) {
                                         if (NoteTables.covered(table, rowIndex, col)) {
+                                            val coveredWidth = colDp.getOrElse(col) { 0.dp }
+                                            Box(
+                                                Modifier
+                                                    .width(coveredWidth)
+                                                    .heightIn(min = rowMin)
+                                                    .background(if (anchorFilled(table, rowIndex, col)) fillColor else Color.Transparent)
+                                                    .border(0.6.dp, gridLine),
+                                            )
                                             col++
                                             continue
                                         }
@@ -439,6 +447,18 @@ fun TableBlock(
             )
         }
     }
+}
+
+private fun anchorFilled(table: NoteTable, row: Int, col: Int): Boolean {
+    for (r in row downTo 0) {
+        for (c in col downTo 0) {
+            if (NoteTables.covered(table, r, c)) continue
+            val rowSpan = NoteTables.rowSpan(table, r, c).coerceAtLeast(1)
+            val colSpan = NoteTables.colSpan(table, r, c).coerceAtLeast(1)
+            if (r + rowSpan > row && c + colSpan > col) return NoteTables.filled(table, r, c)
+        }
+    }
+    return false
 }
 
 private fun menuAlign(table: NoteTable, menu: TableMenu): Pair<Int, Int> {
