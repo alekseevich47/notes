@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +70,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -90,6 +92,7 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -100,7 +103,9 @@ import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 private val TableBlue = Color(0xFF2F80ED)
@@ -122,6 +127,91 @@ private sealed interface TableMenu {
     data class Row(val index: Int) : TableMenu
     data class Column(val index: Int) : TableMenu
     data class Cell(val row: Int, val col: Int) : TableMenu
+}
+
+/**
+ * A long-press opens the cell table menu unless it lands on glyphs.
+ * Focus does not matter: another cell being edited still gets the cell menu.
+ * Glyph presses stay with the text selection popup.
+ */
+internal fun cellLongPressOpensCellMenu(onGlyph: Boolean): Boolean = !onGlyph
+
+internal data class CellSpan(
+    val row: Int,
+    val col: Int,
+    val colSpan: Int,
+    val rowSpan: Int,
+)
+
+/** Anchors only. Covered cells are omitted so they are not drawn. */
+internal fun anchorSpans(
+    rowCount: Int,
+    colCount: Int,
+    covered: (row: Int, col: Int) -> Boolean,
+    colSpan: (row: Int, col: Int) -> Int,
+    rowSpan: (row: Int, col: Int) -> Int,
+): List<CellSpan> {
+    if (rowCount <= 0 || colCount <= 0) return emptyList()
+    val spans = mutableListOf<CellSpan>()
+    for (row in 0 until rowCount) {
+        var col = 0
+        while (col < colCount) {
+            if (!covered(row, col)) {
+                val columns = colSpan(row, col).coerceIn(1, colCount - col)
+                val rows = rowSpan(row, col).coerceIn(1, rowCount - row)
+                spans += CellSpan(row, col, columns, rows)
+                col += columns
+            } else {
+                col++
+            }
+        }
+    }
+    return spans
+}
+
+/**
+ * Row heights from single-row cells, then any extra a vertical merge needs
+ * so the anchor's box is the sum of the rows it covers.
+ */
+internal fun rowHeightsForSpans(
+    rowCount: Int,
+    spans: List<CellSpan>,
+    contentHeights: FloatArray,
+    minRowPx: Float,
+): FloatArray {
+    val heights = FloatArray(rowCount) { minRowPx.coerceAtLeast(0f) }
+    spans.forEachIndexed { index, span ->
+        if (span.rowSpan == 1 && span.row in heights.indices) {
+            heights[span.row] = max(heights[span.row], contentHeights.getOrElse(index) { 0f })
+        }
+    }
+    spans.forEachIndexed { index, span ->
+        if (span.rowSpan <= 1) return@forEachIndexed
+        val last = (span.row + span.rowSpan - 1).coerceIn(0, heights.lastIndex)
+        var sum = 0f
+        for (row in span.row until span.row + span.rowSpan) {
+            if (row in heights.indices) sum += heights[row]
+        }
+        val extra = contentHeights.getOrElse(index) { 0f } - sum
+        if (extra > 0f) heights[last] += extra
+    }
+    return heights
+}
+
+internal fun spanOrigin(span: CellSpan, colWidths: FloatArray, rowHeights: FloatArray): Pair<Float, Float> {
+    var x = 0f
+    for (col in 0 until span.col) x += colWidths.getOrElse(col) { 0f }
+    var y = 0f
+    for (row in 0 until span.row) y += rowHeights.getOrElse(row) { 0f }
+    return x to y
+}
+
+internal fun spanSize(span: CellSpan, colWidths: FloatArray, rowHeights: FloatArray): Pair<Float, Float> {
+    var width = 0f
+    for (col in span.col until span.col + span.colSpan) width += colWidths.getOrElse(col) { 0f }
+    var height = 0f
+    for (row in span.row until span.row + span.rowSpan) height += rowHeights.getOrElse(row) { 0f }
+    return width to height
 }
 
 internal fun growingColumnWidths(
@@ -307,81 +397,65 @@ fun TableBlock(
                     }
                 }
                 Column(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
-                    Column {
-                        rows.forEachIndexed { rowIndex, _ ->
-                            key(rowIndex) {
-                                val highlightRow = when (val open = menu) {
-                                    is TableMenu.Row -> open.index == rowIndex
-                                    is TableMenu.Cell -> open.row == rowIndex
-                                    else -> false
+                    val spans = anchorSpans(
+                        rowCount = rows.size,
+                        colCount = width,
+                        covered = { row, col -> NoteTables.covered(table, row, col) },
+                        colSpan = { row, col -> NoteTables.colSpan(table, row, col) },
+                        rowSpan = { row, col -> NoteTables.rowSpan(table, row, col) },
+                    )
+                    val minRowPx = with(density) { 48.dp.toPx() }
+                    MergedCellGrid(
+                        spans = spans,
+                        colWidthsPx = colWidths,
+                        minRowPx = minRowPx,
+                        onRowHeights = { heights ->
+                            val changed = heights.size != rowHeights.size ||
+                                heights.indices.any { rowHeights[it] != heights[it] }
+                            if (changed) {
+                                rowHeights.clear()
+                                heights.forEach { rowHeights.add(it) }
+                            }
+                        },
+                    ) {
+                        spans.forEach { span ->
+                            key(span.row to span.col) {
+                                val open = menu
+                                val highlighted = when (open) {
+                                    is TableMenu.Row -> open.index == span.row
+                                    is TableMenu.Column -> open.index == span.col
+                                    is TableMenu.Cell -> open.row == span.row && open.col == span.col
+                                    null -> false
                                 }
-                                val rowMin = rowHeights.getOrNull(rowIndex)?.takeIf { it > 0f }?.let { with(density) { it.toDp() } } ?: 48.dp
-                                Row(
-                                    Modifier.onGloballyPositioned { coords ->
-                                            val height = coords.size.height.toFloat()
-                                            while (rowHeights.size <= rowIndex) rowHeights.add(0f)
-                                            if (rowIndex < rowHeights.size && rowHeights[rowIndex] != height) {
-                                                rowHeights[rowIndex] = height
-                                            }
-                                        },
-                                ) {
-                                    var col = 0
-                                    while (col < width) {
-                                        if (NoteTables.covered(table, rowIndex, col)) {
-                                            val coveredWidth = colDp.getOrElse(col) { 0.dp }
-                                            Box(
-                                                Modifier
-                                                    .width(coveredWidth)
-                                                    .heightIn(min = rowMin)
-                                                    .background(if (anchorFilled(table, rowIndex, col)) fillColor else Color.Transparent)
-                                                    .border(0.6.dp, gridLine),
-                                            )
-                                            col++
-                                            continue
+                                val spanWidthPx = spanSize(span, colWidths, FloatArray(0)).first
+                                TableCellEditor(
+                                    table = table,
+                                    row = span.row,
+                                    col = span.col,
+                                    width = with(density) { spanWidthPx.toDp() },
+                                    fillColor = fillColor,
+                                    gridLine = gridLine,
+                                    ink = ink,
+                                    hiddenUnlocked = hiddenUnlocked,
+                                    highlighted = highlighted,
+                                    focused = active == (span.row to span.col),
+                                    formats = formats,
+                                    blockIndex = blockIndex,
+                                    onChange = onChange,
+                                    onAskTable = onAskTable,
+                                    onRequestUnlock = onRequestUnlock,
+                                    onFocused = { focused ->
+                                        if (focused) {
+                                            active = span.row to span.col
+                                            formats.editingCell = true
+                                            if (menu !is TableMenu.Cell) menu = null
+                                        } else if (active == (span.row to span.col)) {
+                                            active = null
+                                            formats.editingCell = false
                                         }
-                                        val span = NoteTables.colSpan(table, rowIndex, col).coerceIn(1, width - col)
-                                        val cellWidth = colDp.subList(col, col + span).fold(0.dp) { acc, dp -> acc + dp }
-                                        val colIndex = col
-                                        val highlightCol = when (val open = menu) {
-                                            is TableMenu.Column -> open.index == colIndex
-                                            is TableMenu.Cell -> open.row == rowIndex && open.col == colIndex
-                                            else -> false
-                                        }
-                                        key(rowIndex to colIndex) {
-                                            TableCellEditor(
-                                                table = table,
-                                                row = rowIndex,
-                                                col = colIndex,
-                                                width = cellWidth,
-                                                minHeight = rowMin,
-                                                fillColor = fillColor,
-                                                gridLine = gridLine,
-                                                ink = ink,
-                                                hiddenUnlocked = hiddenUnlocked,
-                                                highlighted = highlightRow || highlightCol,
-                                                focused = active == (rowIndex to colIndex),
-                                                formats = formats,
-                                                blockIndex = blockIndex,
-                                                onChange = onChange,
-                                                onAskTable = onAskTable,
-                                                onRequestUnlock = onRequestUnlock,
-                                                onFocused = { focused ->
-                                                    if (focused) {
-                                                        active = rowIndex to colIndex
-                                                        formats.editingCell = true
-                                                        if (menu !is TableMenu.Cell) menu = null
-                                                    } else if (active == (rowIndex to colIndex)) {
-                                                        active = null
-                                                        formats.editingCell = false
-                                                    }
-                                                },
-                                                onCellMenu = { menu = TableMenu.Cell(rowIndex, colIndex) },
-                                                onRowMenu = { menu = TableMenu.Row(rowIndex) },
-                                            )
-                                        }
-                                        col += span
-                                    }
-                                }
+                                    },
+                                    onCellMenu = { menu = TableMenu.Cell(span.row, span.col) },
+                                )
                             }
                         }
                     }
@@ -449,16 +523,61 @@ fun TableBlock(
     }
 }
 
-private fun anchorFilled(table: NoteTable, row: Int, col: Int): Boolean {
-    for (r in row downTo 0) {
-        for (c in col downTo 0) {
-            if (NoteTables.covered(table, r, c)) continue
-            val rowSpan = NoteTables.rowSpan(table, r, c).coerceAtLeast(1)
-            val colSpan = NoteTables.colSpan(table, r, c).coerceAtLeast(1)
-            if (r + rowSpan > row && c + colSpan > col) return NoteTables.filled(table, r, c)
+@Composable
+private fun MergedCellGrid(
+    spans: List<CellSpan>,
+    colWidthsPx: FloatArray,
+    minRowPx: Float,
+    onRowHeights: (FloatArray) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val seen = remember { object { var heights = floatArrayOf() } }
+    Layout(content = content, modifier = modifier) { measurables, _ ->
+        val widths = FloatArray(spans.size)
+        spans.forEachIndexed { index, span ->
+            widths[index] = spanSize(span, colWidthsPx, FloatArray(0)).first
+        }
+        val wrap = measurables.mapIndexed { index, measurable ->
+            val widthPx = widths[index].roundToInt().coerceAtLeast(0)
+            measurable.measure(
+                Constraints(
+                    minWidth = widthPx,
+                    maxWidth = widthPx,
+                    minHeight = 0,
+                    maxHeight = Constraints.Infinity,
+                ),
+            )
+        }
+        val rowCount = spans.maxOfOrNull { it.row + it.rowSpan } ?: 0
+        val contentHeights = FloatArray(wrap.size) { wrap[it].height.toFloat() }
+        val rowHeights = rowHeightsForSpans(rowCount, spans, contentHeights, minRowPx)
+        if (!seen.heights.contentEquals(rowHeights)) {
+            val snapshot = rowHeights.copyOf()
+            seen.heights = snapshot
+            scope.launch { onRowHeights(snapshot) }
+        }
+        val placed = measurables.mapIndexed { index, measurable ->
+            val (widthPx, heightPx) = spanSize(spans[index], colWidthsPx, rowHeights)
+            measurable.measure(
+                Constraints(
+                    minWidth = widthPx.roundToInt().coerceAtLeast(0),
+                    maxWidth = widthPx.roundToInt().coerceAtLeast(0),
+                    minHeight = heightPx.roundToInt().coerceAtLeast(0),
+                    maxHeight = heightPx.roundToInt().coerceAtLeast(0),
+                ),
+            )
+        }
+        val totalWidth = colWidthsPx.sum().roundToInt().coerceAtLeast(0)
+        val totalHeight = rowHeights.sum().roundToInt().coerceAtLeast(0)
+        layout(totalWidth, totalHeight) {
+            placed.forEachIndexed { index, placeable ->
+                val (x, y) = spanOrigin(spans[index], colWidthsPx, rowHeights)
+                placeable.place(x.roundToInt(), y.roundToInt())
+            }
         }
     }
-    return false
 }
 
 private fun menuAlign(table: NoteTable, menu: TableMenu): Pair<Int, Int> {
@@ -597,7 +716,6 @@ private fun TableCellEditor(
     row: Int,
     col: Int,
     width: Dp,
-    minHeight: Dp,
     fillColor: Color,
     gridLine: Color,
     ink: Color,
@@ -611,7 +729,6 @@ private fun TableCellEditor(
     onRequestUnlock: () -> Unit,
     onFocused: (Boolean) -> Unit,
     onCellMenu: () -> Unit,
-    onRowMenu: () -> Unit,
 ) {
     val value = table.cells.getOrNull(row)?.getOrNull(col).orEmpty()
     val marks = NoteTables.cellMarks(table, row, col)
@@ -676,17 +793,18 @@ private fun TableCellEditor(
     }
     toolbar.onSelectionGestureBegan = { menuVisible = false }
     val pad = with(LocalDensity.current) { 8.dp.toPx() }
+    val layoutState = androidx.compose.runtime.rememberUpdatedState(layout)
     Box(
         modifier = Modifier
             .width(width)
-            .heightIn(min = minHeight)
+            .heightIn(min = 48.dp)
             .background(if (filled) fillColor else Color.Transparent)
             .border(borderWidth, borderColor)
-            .pointerInput(focused, value, marks) {
+            .pointerInput(value, marks) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    val onGlyph = focused && glyphHit(layout, down.position, pad)
-                    if (onGlyph) return@awaitEachGesture
+                    val onGlyph = glyphHit(layoutState.value, down.position, pad)
+                    if (!cellLongPressOpensCellMenu(onGlyph)) return@awaitEachGesture
                     val slop = viewConfiguration.touchSlop
                     val released = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                         while (true) {
@@ -704,7 +822,7 @@ private fun TableCellEditor(
                         event.changes.forEach { it.consume() }
                         if (event.changes.none { it.pressed }) break
                     }
-                    if (focused) onCellMenu() else onRowMenu()
+                    onCellMenu()
                 }
             }
             .padding(horizontal = 8.dp, vertical = 8.dp),
