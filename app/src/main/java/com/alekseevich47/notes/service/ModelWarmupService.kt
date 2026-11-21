@@ -56,7 +56,13 @@ class ModelWarmupService : Service() {
             stopWarm()
             return START_NOT_STICKY
         }
-        if (job?.isActive != true) {
+        // A second start while the load is running, or after engines are held,
+        // only refreshes the notification. Opening the app must not construct
+        // T-one again. Nothing loaded (failed warm, or models installed later)
+        // is started once more.
+        val warmJob = job
+        val nothingLoaded = !WarmEngines.toneReady() && !WarmEngines.gigaReady()
+        if (warmJob?.isActive != true && (warmJob == null || nothingLoaded)) {
             val ticket = lifetime.open()
             epoch = ticket
             job = scope.launch {
@@ -68,6 +74,13 @@ class ModelWarmupService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Swiping the task away must not stop this service. stopWithTask is
+        // already false. An OEM killer can still drop the process; the next
+        // foreground entry calls start() again.
+        AppLog.i(TAG, "task removed; warmup stays")
     }
 
     override fun onDestroy() {
@@ -169,8 +182,14 @@ class ModelWarmupService : Service() {
         private val lifetime = WarmLifetime()
 
         fun start(context: Context) {
-            val intent = Intent(context, ModelWarmupService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                if (!NotesPrefs.open(context).getBoolean(NotesPrefs.WARMUP_ON_BOOT, false)) return
+                val intent = Intent(context, ModelWarmupService::class.java)
+                ContextCompat.startForegroundService(context, intent)
+            } catch (error: Exception) {
+                // Android 12+ throws if the process is still background.
+                AppLog.e(TAG, "startForegroundService failed", error)
+            }
         }
 
         fun stop(context: Context) {

@@ -13,7 +13,7 @@ object SettingsCopy {
 
     const val WARMUP_TITLE = "Автозагрузка моделей"
     const val WARMUP_SUBTITLE =
-        "На Tecno, Xiaomi и Samsung также нужны системный автозапуск и работа без ограничений батареи. Модели загружаются только после разблокировки экрана."
+        "На Tecno, Xiaomi и Samsung также нужны системный автозапуск и работа без ограничений батареи. Модели загружаются только после разблокировки экрана. Нажатие открывает эти системные экраны."
 
     const val RECOGNIZER_TITLE = "Распознавание"
     const val RECOGNIZER_TONE = "T-one"
