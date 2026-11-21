@@ -51,7 +51,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -69,7 +68,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.alekseevich47.notes.domain.BlockKind
 import com.alekseevich47.notes.domain.MarkStyle
+import com.alekseevich47.notes.domain.NoteBlock
+import com.alekseevich47.notes.domain.NoteDocuments
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.player.PlaybackSnapshot
 import com.alekseevich47.notes.service.PlaybackService
@@ -80,11 +82,14 @@ import com.alekseevich47.notes.ui.editor.EditorFormatBar
 import com.alekseevich47.notes.ui.editor.NoteEditorController
 import com.alekseevich47.notes.ui.editor.NoteSurfaceBridge
 import com.alekseevich47.notes.ui.editor.RichNoteEditor
-import com.alekseevich47.notes.ui.editor.TrailingNoteField
+import com.alekseevich47.notes.ui.editor.TableBlock
 import com.alekseevich47.notes.ui.editor.observeSelectionTaps
-import com.alekseevich47.notes.ui.editor.TableGrid
 import com.alekseevich47.notes.ui.player.MiniPlayer
 import com.alekseevich47.notes.ui.theme.NotesFont
+import com.alekseevich47.notes.ui.theme.NotesMuted
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 private enum class HiddenPinStage { UNLOCK, CREATE, CONFIRM }
@@ -107,13 +112,11 @@ fun EditorScreen(
     var pinStage by remember { mutableStateOf(HiddenPinStage.UNLOCK) }
     var draftPin by remember { mutableStateOf<String?>(null) }
     val formats = remember { NoteEditorController() }
-    val bodyFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val scroll = rememberScrollState()
     val bodyTap = remember { MutableInteractionSource() }
-    var bodyEpoch by remember { mutableStateOf(0) }
-    var trailingFocus by remember { mutableStateOf(0) }
-    var knownTableCount by remember(noteId) { mutableStateOf(-1) }
+    var insertBlock by remember { mutableIntStateOf(0) }
+    var insertCursor by remember { mutableIntStateOf(0) }
     val surface = remember { NoteSurfaceBridge() }
     var bodyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     SideEffect {
@@ -137,24 +140,6 @@ fun EditorScreen(
         if (shown.id != noteId) return@LaunchedEffect
         viewModel.player.followOpenNote(shown.id, shown.audioPath, shown.title)
     }
-    LaunchedEffect(noteId, note?.id, note?.document?.tables?.size) {
-        val shown = note ?: return@LaunchedEffect
-        if (shown.id != noteId) return@LaunchedEffect
-        val count = shown.document.tables.size
-        if (knownTableCount >= 0 && count > knownTableCount) {
-            trailingFocus++
-            withFrameNanos { }
-            withFrameNanos { }
-            scroll.scrollTo(scroll.maxValue)
-        }
-        knownTableCount = count
-    }
-
-    fun focusBody() {
-        bodyFocus.requestFocus()
-        keyboard?.show()
-    }
-
     fun openPinPrompt() {
         if (askPin) return
         pinStage = if (viewModel.hasPin()) HiddenPinStage.UNLOCK else HiddenPinStage.CREATE
@@ -179,7 +164,7 @@ fun EditorScreen(
             }
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { confirmDelete = true }) {
-                Icon(Icons.Outlined.Delete, contentDescription = "Удалить")
+                Icon(Icons.Outlined.Delete, contentDescription = "Удалить", tint = MaterialTheme.colorScheme.error)
             }
         }
         if (current == null) {
@@ -201,6 +186,16 @@ fun EditorScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
             )
+            val edited = lastEditedCaption(current.createdAt, current.updatedAt)
+            if (edited != null) {
+                Text(
+                    edited,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = NotesMuted,
+                    fontFamily = NotesFont,
+                )
+            }
             Spacer(Modifier.height(8.dp))
             BoxWithConstraints(
                 Modifier
@@ -208,32 +203,11 @@ fun EditorScreen(
                     .fillMaxWidth(),
             ) {
                 val minBody = maxHeight
-                val density = LocalDensity.current
-                var trailingFocused by remember(current.id) { mutableStateOf(false) }
-                var trailingTopPx by remember(current.id) { mutableIntStateOf(-1) }
-                KeepCaretVisible(
-                    noteId = current.id,
-                    text = current.document.text,
-                    marks = current.document.marks,
-                    hiddenLocked = !unlocked && current.document.marks.any { it.style == MarkStyle.HIDDEN },
-                    focused = formats.bodyFocused,
-                    textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp),
-                    scroll = scroll,
-                )
-                if (current.document.tables.isNotEmpty()) {
-                    KeepCaretVisible(
-                        noteId = current.id,
-                        text = current.document.trailing,
-                        marks = emptyList(),
-                        hiddenLocked = false,
-                        focused = trailingFocused,
-                        textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp),
-                        scroll = scroll,
-                        contentTopPx = trailingTopPx,
-                        topInsetPx = with(density) { 8.dp.roundToPx() },
-                        followEdits = true,
-                    )
-                }
+                val flow = NoteDocuments.flow(current.document)
+                val structure = flow.count { it.kind == BlockKind.TABLE } to flow.size
+                val lastText = flow.indexOfLast { it.kind == BlockKind.TEXT }
+                val requesters = remember(current.id, structure) { List(flow.size) { FocusRequester() } }
+                val textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp)
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -244,66 +218,61 @@ fun EditorScreen(
                         .clickable(
                             interactionSource = bodyTap,
                             indication = null,
-                            onClickLabel = if (current.document.tables.isEmpty()) "Начните писать" else "Продолжите писать",
+                            onClickLabel = "Ваш текст",
                             onClick = {
-                                if (current.document.tables.isEmpty()) focusBody() else trailingFocus++
+                                requesters.getOrNull(lastText)?.requestFocus()
+                                keyboard?.show()
                             },
-                        )
-                        .padding(horizontal = 20.dp),
+                        ),
                 ) {
-                    val hasTables = current.document.tables.isNotEmpty()
                     Column(Modifier.fillMaxWidth()) {
-                        key(current.id, bodyEpoch) {
-                            RichNoteEditor(
-                                document = current.document,
-                                hiddenUnlocked = unlocked,
-                                onDocument = viewModel::setDocument,
-                                onNeedSelection = { onToast("Выделите фрагмент") },
-                                onRequestUnlock = { openPinPrompt() },
-                                onAskTable = { askTable = true },
-                                focusRequester = bodyFocus,
-                                formats = formats,
-                                pinDialogVisible = askPin,
-                                surface = surface,
-                            )
-                        }
-                        current.document.tables.forEach { table ->
-                            key(table.id) {
-                                TableGrid(
-                                    table = table,
-                                    onChange = viewModel::updateTable,
-                                    onDelete = {
-                                        val last = current.document.tables.none { it.id != table.id }
-                                        if (last && current.document.trailing.isNotEmpty()) {
-                                            bodyEpoch++
-                                        }
-                                        viewModel.removeTable(table.id)
-                                    },
-                                )
-                            }
-                        }
-                        if (hasTables) {
-                            key(current.id) {
-                                TrailingNoteField(
-                                    text = current.document.trailing,
-                                    onText = viewModel::setTrailing,
-                                    focusRequest = trailingFocus,
-                                    modifier = Modifier
-                                        .onFocusChanged { trailingFocused = it.hasFocus }
-                                        .onGloballyPositioned { coords ->
-                                            val content = bodyCoords
-                                            if (
-                                                content == null ||
-                                                !content.isAttached ||
-                                                !coords.isAttached
-                                            ) {
-                                                return@onGloballyPositioned
-                                            }
-                                            val origin = content.localToRoot(Offset.Zero)
-                                            val here = coords.localToRoot(Offset.Zero)
-                                            trailingTopPx = (here.y - origin.y).roundToInt()
+                        flow.forEachIndexed { index, block ->
+                            key(current.id, index, structure) {
+                                when (block.kind) {
+                                    BlockKind.TEXT -> NoteTextBlock(
+                                        noteId = current.id,
+                                        text = block.text,
+                                        marks = block.marks,
+                                        placeholder = textPlaceholder(flow, index),
+                                        hiddenUnlocked = unlocked,
+                                        blockIndex = index,
+                                        focusRequester = requesters[index],
+                                        formats = formats,
+                                        pinDialogVisible = askPin,
+                                        surface = surface,
+                                        useSharedSurface = index == 0,
+                                        scroll = scroll,
+                                        textWidth = textWidth,
+                                        bodyCoords = bodyCoords,
+                                        onText = { text, marks -> viewModel.setBlockText(index, text, marks) },
+                                        onNeedSelection = { onToast("Выделите фрагмент") },
+                                        onRequestUnlock = { openPinPrompt() },
+                                        onAskTable = {
+                                            insertBlock = formats.tableBlock
+                                            insertCursor = formats.tableCursor
+                                            askTable = true
                                         },
-                                )
+                                    )
+                                    BlockKind.TABLE -> {
+                                        val table = block.table
+                                        if (table != null) {
+                                            TableBlock(
+                                                table = table,
+                                                blockIndex = index,
+                                                hiddenUnlocked = unlocked,
+                                                formats = formats,
+                                                onChange = viewModel::updateTable,
+                                                onDelete = { viewModel.removeTable(table.id) },
+                                                onAskTable = {
+                                                    insertBlock = formats.tableBlock
+                                                    insertCursor = formats.tableCursor
+                                                    askTable = true
+                                                },
+                                                onRequestUnlock = { openPinPrompt() },
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                         Spacer(Modifier.height(24.dp))
@@ -349,7 +318,7 @@ fun EditorScreen(
                 )
             }
             AnimatedVisibility(
-                visible = formats.bodyFocused,
+                visible = formats.bodyFocused || formats.editingCell,
                 enter = slideInVertically(animationSpec = tween(180)) { it } + fadeIn(tween(160)),
                 exit = slideOutVertically(animationSpec = tween(140)) { it } + fadeOut(tween(120)),
             ) {
@@ -442,12 +411,97 @@ fun EditorScreen(
     if (askTable) {
         TableSizeDialog(
             onCreate = { rows, cols ->
-                viewModel.addTable(rows, cols)
+                viewModel.addTable(rows, cols, insertBlock, insertCursor)
                 askTable = false
             },
             onDismiss = { askTable = false },
         )
     }
+}
+
+private fun textPlaceholder(flow: List<NoteBlock>, index: Int): String {
+    val block = flow[index]
+    val followedByTable = flow.getOrNull(index + 1)?.kind == BlockKind.TABLE
+    return when {
+        block.text.isEmpty() && followedByTable -> ""
+        flow.any { it.kind == BlockKind.TABLE } -> "Ваш текст..."
+        else -> "Начните писать…"
+    }
+}
+
+@Composable
+private fun NoteTextBlock(
+    noteId: Long,
+    text: String,
+    marks: List<TextMark>,
+    placeholder: String,
+    hiddenUnlocked: Boolean,
+    blockIndex: Int,
+    focusRequester: FocusRequester,
+    formats: NoteEditorController,
+    pinDialogVisible: Boolean,
+    surface: NoteSurfaceBridge,
+    useSharedSurface: Boolean,
+    scroll: ScrollState,
+    textWidth: Dp,
+    bodyCoords: LayoutCoordinates?,
+    onText: (String, List<TextMark>) -> Unit,
+    onNeedSelection: () -> Unit,
+    onRequestUnlock: () -> Unit,
+    onAskTable: () -> Unit,
+) {
+    var focused by remember(noteId, blockIndex) { mutableStateOf(false) }
+    var top by remember(noteId, blockIndex) { mutableIntStateOf(0) }
+    val bridge = remember(noteId, blockIndex) { NoteSurfaceBridge() }
+    KeepCaretVisible(
+        noteId = noteId,
+        text = text,
+        marks = marks,
+        hiddenLocked = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN },
+        focused = focused,
+        textWidth = textWidth,
+        scroll = scroll,
+        contentTopPx = top,
+        followEdits = true,
+    )
+    RichNoteEditor(
+        document = com.alekseevich47.notes.domain.NoteDocument(
+            text = text,
+            marks = marks,
+        ),
+        hiddenUnlocked = hiddenUnlocked,
+        onDocument = { slice -> onText(slice.text, slice.marks) },
+        onNeedSelection = onNeedSelection,
+        onRequestUnlock = onRequestUnlock,
+        onAskTable = onAskTable,
+        focusRequester = focusRequester,
+        formats = formats,
+        pinDialogVisible = pinDialogVisible,
+        surface = if (useSharedSurface) surface else bridge,
+        modifier = Modifier
+            .padding(horizontal = 20.dp)
+            .onGloballyPositioned { coords ->
+                val content = bodyCoords
+                if (content == null || !content.isAttached || !coords.isAttached) return@onGloballyPositioned
+                val origin = content.localToRoot(Offset.Zero)
+                val here = coords.localToRoot(Offset.Zero)
+                top = (here.y - origin.y).roundToInt()
+            },
+        blockIndex = blockIndex,
+        placeholder = placeholder,
+        onFocused = { focused = it },
+    )
+}
+
+internal fun lastEditedCaption(
+    createdAt: Long,
+    updatedAt: Long,
+    zone: ZoneId = ZoneId.systemDefault(),
+): String? {
+    if (updatedAt <= createdAt + 1_500L) return null
+    val stamp = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
+        .format(Instant.ofEpochMilli(updatedAt).atZone(zone))
+    return "последнее изменение: $stamp"
 }
 
 /**
@@ -478,7 +532,6 @@ private fun KeepCaretVisible(
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val body = MaterialTheme.typography.bodyLarge.copy(fontFamily = NotesFont)
-    val labelStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = NotesFont)
     val viewport = scroll.viewportSize
     LaunchedEffect(noteId, text, focused, textWidth, viewport, contentTopPx, topInsetPx) {
         if (contentTopPx < 0) return@LaunchedEffect
@@ -494,15 +547,6 @@ private fun KeepCaretVisible(
         tracked.value = text
         val widthPx = with(density) { textWidth.roundToPx().coerceAtLeast(1) }
         val marginPx = with(density) { 16.dp.roundToPx() }
-        val censorPx = if (!hiddenLocked) {
-            0
-        } else {
-            measurer.measure(
-                text = "Открыть скрытый текст",
-                style = labelStyle,
-                constraints = Constraints(maxWidth = widthPx),
-            ).size.height + with(density) { 6.dp.roundToPx() }
-        }
         val layout = measurer.measure(
             text = annotatedNote(text, marks),
             style = body,
@@ -511,7 +555,7 @@ private fun KeepCaretVisible(
         val rect = layout.getCursorRect(caret.coerceIn(0, text.length))
         val caretBottom = trailingCaretBottom(
             fieldTopPx = contentTopPx,
-            topInsetPx = topInsetPx + censorPx,
+            topInsetPx = topInsetPx,
             cursorBottomPx = rect.bottom.roundToInt(),
         )
         repeat(4) { frame ->

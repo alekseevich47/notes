@@ -30,7 +30,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -42,6 +41,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.alekseevich47.notes.ui.components.softShadowPadding
+import com.alekseevich47.notes.ui.components.softShadowRoom
 import com.alekseevich47.notes.ui.theme.NotesFont
 import kotlin.math.max
 import kotlin.math.min
@@ -71,6 +72,8 @@ fun SelectionActionsPopup(
     val density = LocalDensity.current
     val gapPx = with(density) { 10.dp.roundToPx() }
     val marginPx = with(density) { 8.dp.roundToPx() }
+    val shadowRoom = softShadowRoom(10.dp)
+    val shadowPadPx = with(density) { shadowRoom.roundToPx() }
     Popup(
         popupPositionProvider = object : PopupPositionProvider {
             override fun calculatePosition(
@@ -87,6 +90,7 @@ fun SelectionActionsPopup(
                     endHandle = endHandle,
                     gapPx = gapPx,
                     marginPx = marginPx,
+                    shadowPadPx = shadowPadPx,
                 )
             }
         },
@@ -102,7 +106,11 @@ fun SelectionActionsPopup(
         val plate = MaterialTheme.colorScheme.surface
         Box(
             modifier = Modifier
-                .shadow(10.dp, shape, ambientColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
+                .softShadowPadding(
+                    shape = shape,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                    room = shadowRoom,
+                )
                 .clip(shape)
                 .background(plate),
         ) {
@@ -132,22 +140,27 @@ private fun placeSelectionMenu(
     endHandle: Rect,
     gapPx: Int,
     marginPx: Int,
+    shadowPadPx: Int,
 ): IntOffset {
     val selLeft = min(startHandle.left, endHandle.left)
     val selRight = max(startHandle.right, endHandle.right)
     val selTop = min(startHandle.top, endHandle.top)
     val selBottom = max(startHandle.bottom, endHandle.bottom)
+    // Padding gives the fade room inside the popup window. Place the plate, not
+    // the padding, so the labels stay on the same spot.
+    val plateWidth = (popupContentSize.width - shadowPadPx * 2).coerceAtLeast(0)
+    val plateHeight = (popupContentSize.height - shadowPadPx * 2).coerceAtLeast(0)
     val center = anchorBounds.left + ((selLeft + selRight) / 2f).toInt()
-    var x = center - popupContentSize.width / 2
-    var y = anchorBounds.top + selTop.toInt() - popupContentSize.height - gapPx
+    var x = center - plateWidth / 2
+    var y = anchorBounds.top + selTop.toInt() - plateHeight - gapPx
     if (y < marginPx) {
         y = anchorBounds.top + selBottom.toInt() + gapPx + 18
     }
-    val maxX = (windowSize.width - popupContentSize.width - marginPx).coerceAtLeast(marginPx)
-    val maxY = (windowSize.height - popupContentSize.height - marginPx).coerceAtLeast(marginPx)
+    val maxX = (windowSize.width - plateWidth - marginPx).coerceAtLeast(marginPx)
+    val maxY = (windowSize.height - plateHeight - marginPx).coerceAtLeast(marginPx)
     x = x.coerceIn(marginPx, maxX)
     y = y.coerceIn(marginPx, maxY)
-    return IntOffset(x, y)
+    return IntOffset(x - shadowPadPx, y - shadowPadPx)
 }
 
 /**

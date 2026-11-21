@@ -46,8 +46,11 @@ import com.alekseevich47.notes.ui.theme.NotesPurple
  */
 class NoteEditorController {
     var bodyFocused by mutableStateOf(false)
+    var editingCell by mutableStateOf(false)
     var activeStyles by mutableStateOf(emptySet<MarkStyle>())
     var listActive by mutableStateOf(false)
+    var tableBlock: Int = 0
+    var tableCursor: Int = 0
     var bold: () -> Unit = {}
     var italic: () -> Unit = {}
     var underline: () -> Unit = {}

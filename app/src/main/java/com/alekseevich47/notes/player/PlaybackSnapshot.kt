@@ -198,23 +198,6 @@ object PlaybackSnapshot {
         return "%d:%02d".format(total / 60L, total % 60L)
     }
 
-    /** "0:12 / 3:40". Stable enough to read; the live elapsed half is a chronometer. */
-    fun notificationTimeText(positionMs: Long, durationMs: Long): String {
-        return clock(positionMs) + " / " + clock(durationMs)
-    }
-
-    /** Suffix next to the chronometer so the row reads "0:12 / 3:40". */
-    fun notificationDurationSuffix(durationMs: Long): String = " / " + clock(durationMs)
-
-    /**
-     * [android.widget.Chronometer.setBase] value. The widget shows
-     * `elapsedRealtime - base`, so this base freezes on the current position
-     * when the chronometer is not started and counts up when it is.
-     */
-    fun chronometerBase(elapsedRealtimeMs: Long, positionMs: Long): Long {
-        return elapsedRealtimeMs - positionMs.coerceAtLeast(0L)
-    }
-
     /**
      * True when playback position is the anchor plus wall-clock time, within
      * [toleranceMs]. A seek falls outside that window.
@@ -233,9 +216,9 @@ object PlaybackSnapshot {
     }
 
     /**
-     * Steady playback must not post again: the chronometer moves the clock
-     * inside the existing notification. A new note, title, play/pause, duration,
-     * or seek does post.
+     * Steady playback must not post again. The shade seek bar advances from
+     * the media session's position, duration, and speed. A new note, title,
+     * play/pause, duration, or seek does post.
      */
     fun shouldPostPlaybackNotification(previous: NotificationPost?, next: NotificationPost): Boolean {
         if (previous == null) return true

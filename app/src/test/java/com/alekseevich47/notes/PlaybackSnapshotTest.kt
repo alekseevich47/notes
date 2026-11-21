@@ -335,9 +335,6 @@ class PlaybackSnapshotTest {
         assertTrue(PlaybackSnapshot.shouldPostPlaybackNotification(posted, seek))
         assertTrue(PlaybackSnapshot.shouldPostPlaybackNotification(posted, paused))
         assertTrue(PlaybackSnapshot.shouldPostPlaybackNotification(null, posted))
-        assertEquals("0:12 / 3:40", PlaybackSnapshot.notificationTimeText(12_000L, 220_000L))
-        assertEquals(" / 3:40", PlaybackSnapshot.notificationDurationSuffix(220_000L))
-        assertEquals(5_000L, PlaybackSnapshot.chronometerBase(elapsedRealtimeMs = 17_000L, positionMs = 12_000L))
     }
 
     private fun reading(

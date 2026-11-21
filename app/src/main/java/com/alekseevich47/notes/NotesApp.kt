@@ -9,6 +9,7 @@ import androidx.work.Configuration
 import com.alekseevich47.notes.data.download.ModelDownloadManager
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.AppChannels
+import com.alekseevich47.notes.service.ModelWarmupService
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -30,6 +31,11 @@ class NotesApp : Application(), Configuration.Provider {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 AppLog.i("NotesApp", "process foreground")
+                // onCreate can run in the background (boot, widget). Android 12+
+                // throws if a foreground service starts from there. onStart means
+                // an activity is up, which is allowed. The service skips a load
+                // it already has.
+                ModelWarmupService.start(this@NotesApp)
             }
 
             override fun onStop(owner: LifecycleOwner) {

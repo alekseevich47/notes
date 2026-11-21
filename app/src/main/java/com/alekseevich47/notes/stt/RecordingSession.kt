@@ -17,6 +17,7 @@ import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.log.AppLog
+import com.alekseevich47.notes.service.ModelWarmupService
 import com.alekseevich47.notes.ui.widgets.WidgetUpdater
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineStream
@@ -123,6 +124,15 @@ class RecordingSession @Inject constructor(
                 // The WAV starts as soon as the beep has been kicked off. A warm
                 // T-one is borrowed; otherwise it loads beside the write. Cold
                 // T-one and the system recognizer never construct T-one here.
+                // If a task killer dropped the warmup process, start it again so
+                // the ongoing notification shows. Do not wait for that load.
+                if (
+                    settings.warmupOnBoot.value &&
+                    !WarmEngines.toneReady() &&
+                    !WarmEngines.gigaReady()
+                ) {
+                    ModelWarmupService.start(context)
+                }
                 when (MicRouting.liveMode(settings.recognizer.value, settings.warmupOnBoot.value)) {
                     LiveMode.TONE_COLD -> {
                         freezeLiveText = true

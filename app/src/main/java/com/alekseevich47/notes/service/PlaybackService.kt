@@ -9,7 +9,6 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
-import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaStyleNotificationHelper
@@ -106,7 +105,7 @@ class PlaybackService : Service() {
             wallMs = now,
         )
         if (foreground && !PlaybackSnapshot.shouldPostPlaybackNotification(posted, next)) return
-        val notification = buildNotification(state, now)
+        val notification = buildNotification(state)
         if (!foreground) {
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -120,24 +119,20 @@ class PlaybackService : Service() {
         posted = next
     }
 
-    private fun buildNotification(state: PlayerUi, elapsedRealtimeMs: Long): Notification {
+    private fun buildNotification(state: PlayerUi): Notification {
         val mediaSession = session
         val open = openPending(state.noteId)
         val style = if (mediaSession != null) {
-            MediaStyleNotificationHelper.DecoratedMediaCustomViewStyle(mediaSession)
+            MediaStyleNotificationHelper.MediaStyle(mediaSession)
                 .setShowActionsInCompactView(0, 1, 2)
         } else {
             null
         }
         val playIcon = if (state.playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         val playLabel = if (state.playing) "Пауза" else "Слушать"
-        val time = timeRow(state, elapsedRealtimeMs)
         val builder = NotificationCompat.Builder(this, AppChannels.PLAYBACK)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle(state.title.ifBlank { "Заметка" })
-            .setContentText(PlaybackSnapshot.notificationTimeText(state.positionMs, state.durationMs))
-            .setCustomContentView(time)
-            .setCustomBigContentView(timeRow(state, elapsedRealtimeMs))
             .setContentIntent(open)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -151,8 +146,7 @@ class PlaybackService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         if (style != null) builder.setStyle(style)
         val notification = builder.build()
-        // DecoratedMediaCustomViewStyle in media3 1.5 does not copy the platform
-        // session token. The shade still needs it so transport stays on this player.
+        // The shade seek bar reads position, duration, and speed from this session.
         if (mediaSession != null) {
             notification.extras.putParcelable(
                 Notification.EXTRA_MEDIA_SESSION,
@@ -160,21 +154,6 @@ class PlaybackService : Service() {
             )
         }
         return notification
-    }
-
-    private fun timeRow(state: PlayerUi, elapsedRealtimeMs: Long): RemoteViews {
-        val views = RemoteViews(packageName, R.layout.playback_notification_time)
-        views.setChronometer(
-            R.id.playback_elapsed,
-            PlaybackSnapshot.chronometerBase(elapsedRealtimeMs, state.positionMs),
-            null,
-            state.playing,
-        )
-        views.setTextViewText(
-            R.id.playback_duration,
-            PlaybackSnapshot.notificationDurationSuffix(state.durationMs),
-        )
-        return views
     }
 
     private fun openPending(noteId: Long?): PendingIntent {
