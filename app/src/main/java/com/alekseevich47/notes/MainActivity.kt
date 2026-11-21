@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.log.AppLog
+import com.alekseevich47.notes.service.ModelWarmupService
 import com.alekseevich47.notes.ui.NotesRoot
 import com.alekseevich47.notes.ui.theme.NotesTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         AppLog.i(TAG, "onStart")
+        ModelWarmupService.start(this)
     }
 
     override fun onResume() {
