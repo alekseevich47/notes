@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -89,56 +88,70 @@ fun LiquidGlassPlate(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val palette = LiquidGlassTokens.palette()
-    Box(
-        modifier = modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
-    ) {
-        if (halo) {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .hazeEffect(
-                        state = hazeState,
-                        style = HazeStyle(
-                            backgroundColor = Color.Transparent,
-                            tints = emptyList(),
-                            blurRadius = 16.dp,
-                            noiseFactor = 0.04f,
-                        ),
-                    ) {
-                        progressive = HazeProgressive.RadialGradient(
-                            centerIntensity = 1f,
-                            radiusIntensity = 0f,
-                        )
-                    },
+    // The plate keeps the caller's size. The shadow is a larger layer behind it,
+    // outside the offscreen buffer — that buffer is only as big as the plate and
+    // would clip the penumbra to a hard rim.
+    Box(modifier = modifier) {
+        if (elevation > 0.dp) {
+            SoftShadowLayer(
+                shape = shape,
+                color = palette.shadow,
+                room = softShadowRoom(elevation),
+                modifier = if (halo) Modifier.matchParentSize().padding(18.dp) else Modifier.matchParentSize(),
             )
         }
         Box(
             modifier = Modifier
-                .then(if (halo) Modifier.padding(18.dp) else Modifier)
-                .shadow(elevation, shape, clip = false, ambientColor = palette.shadow, spotColor = palette.shadow)
-                .clip(shape),
+                .matchParentSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
         ) {
+            if (halo) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .hazeEffect(
+                            state = hazeState,
+                            style = HazeStyle(
+                                backgroundColor = Color.Transparent,
+                                tints = emptyList(),
+                                blurRadius = 16.dp,
+                                noiseFactor = 0.04f,
+                            ),
+                        ) {
+                            progressive = HazeProgressive.RadialGradient(
+                                centerIntensity = 1f,
+                                radiusIntensity = 0f,
+                            )
+                        },
+                )
+            }
             Box(
                 modifier = Modifier
-                    .matchParentSize()
-                    .hazeEffect(
-                        state = hazeState,
-                        style = HazeStyle(
-                            backgroundColor = palette.fill,
-                            tints = listOf(HazeTint(palette.fill), HazeTint(palette.tint)),
-                            blurRadius = LiquidGlassTokens.Blur,
-                            noiseFactor = 0.08f,
-                        ),
-                    )
-                    .background(palette.fill),
-            )
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .border(1.dp, palette.edge, shape)
-                    .background(Brush.linearGradient(palette.sheen, tileMode = TileMode.Clamp)),
-            )
-            content()
+                    .then(if (halo) Modifier.padding(18.dp) else Modifier)
+                    .clip(shape),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .hazeEffect(
+                            state = hazeState,
+                            style = HazeStyle(
+                                backgroundColor = palette.fill,
+                                tints = listOf(HazeTint(palette.fill), HazeTint(palette.tint)),
+                                blurRadius = LiquidGlassTokens.Blur,
+                                noiseFactor = 0.08f,
+                            ),
+                        )
+                        .background(palette.fill),
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .border(1.dp, palette.edge, shape)
+                        .background(Brush.linearGradient(palette.sheen, tileMode = TileMode.Clamp)),
+                )
+                content()
+            }
         }
     }
 }
