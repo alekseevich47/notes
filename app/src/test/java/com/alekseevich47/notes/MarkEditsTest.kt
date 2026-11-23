@@ -38,6 +38,29 @@ class MarkEditsTest {
     }
 
     @Test
+    fun clearCutsMarksOnTheBoundaries() {
+        val cleared = MarkEdits.clear(
+            listOf(
+                TextMark(0, 6, MarkStyle.BOLD),
+                TextMark(4, 6, MarkStyle.ITALIC),
+                TextMark(10, 14, MarkStyle.UNDERLINE),
+                TextMark(5, 12, MarkStyle.STRIKE),
+            ),
+            start = 4,
+            end = 8,
+        )
+        assertEquals(listOf(TextMark(0, 4, MarkStyle.BOLD)), cleared.filter { it.style == MarkStyle.BOLD })
+        assertEquals(emptyList<TextMark>(), cleared.filter { it.style == MarkStyle.ITALIC })
+        assertEquals(listOf(TextMark(10, 14, MarkStyle.UNDERLINE)), cleared.filter { it.style == MarkStyle.UNDERLINE })
+        assertEquals(listOf(TextMark(8, 12, MarkStyle.STRIKE)), cleared.filter { it.style == MarkStyle.STRIKE })
+        val split = MarkEdits.clear(listOf(TextMark(0, 9, MarkStyle.BOLD)), start = 2, end = 6)
+        assertEquals(
+            listOf(TextMark(0, 2, MarkStyle.BOLD), TextMark(6, 9, MarkStyle.BOLD)),
+            split,
+        )
+    }
+
+    @Test
     fun deleteAcrossTheBoundaryTrimsTheSpan() {
         // "d w" crosses the end of "bold" into the following word.
         val after = "hello bolorld"

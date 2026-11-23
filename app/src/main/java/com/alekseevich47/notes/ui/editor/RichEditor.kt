@@ -337,6 +337,41 @@ internal fun RichNoteEditor(
         hideMenu()
     }
 
+    fun pasteSelection() {
+        if (readOnly) return
+        val clip = clipboard.getText()?.text ?: return
+        if (clip.isEmpty()) return
+        val start = field.selection.min
+        val end = field.selection.max.coerceAtMost(field.text.length)
+        if (start > field.text.length) return
+        if (overlapsLockedHidden()) {
+            requestUnlock()
+            return
+        }
+        val previous = field.text
+        val proposed = previous.substring(0, start) + clip + previous.substring(end)
+        val cursor = start + clip.length
+        publish(
+            previous,
+            ListAutoFormat.afterEdit(previous, proposed, cursor, listStart, composing = false),
+        )
+        hideMenu()
+    }
+
+    fun clearStyles() {
+        if (readOnly) return
+        val start = field.selection.min
+        val end = field.selection.max
+        if (start == end) return
+        if (overlapsLockedHidden()) {
+            requestUnlock()
+            return
+        }
+        val caret = field.selection.end
+        onDocument(text, MarkEdits.clear(marks, start, end), EditKind.STRUCTURE, caret, caret)
+        hideMenu()
+    }
+
     fun selectAll() {
         releasePlatformMenu = false
         if (field.text.isEmpty()) {
@@ -581,8 +616,10 @@ internal fun RichNoteEditor(
                         startHandle = shown.getCursorRect(start),
                         endHandle = shown.getCursorRect(end),
                         overflow = menuOverflow,
+                        activeStyles = stylesTouching(marks, field.selection),
                         onCut = { cutSelection() },
                         onCopy = { copySelection() },
+                        onPaste = { pasteSelection() },
                         onMore = { menuOverflow = true },
                         onDismiss = { if (menuVisible) collapseSelection() },
                         onBack = { menuOverflow = false },
@@ -592,6 +629,7 @@ internal fun RichNoteEditor(
                         onItalic = { applyMark(MarkStyle.ITALIC) },
                         onStrike = { applyMark(MarkStyle.STRIKE) },
                         onUnderline = { applyMark(MarkStyle.UNDERLINE) },
+                        onPlain = { clearStyles() },
                     )
                 }
             }

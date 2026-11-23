@@ -936,6 +936,7 @@ private fun TableCellEditor(
                     startHandle = shown.getCursorRect(start),
                     endHandle = shown.getCursorRect(end),
                     overflow = menuOverflow,
+                    activeStyles = cellStyles(marks, field.selection),
                     onCut = {
                         val a = field.selection.min
                         val b = field.selection.max
@@ -958,6 +959,18 @@ private fun TableCellEditor(
                         }
                         menuVisible = false
                     },
+                    onPaste = {
+                        val clip = clipboard.getText()?.text
+                        val a = field.selection.min
+                        val b = field.selection.max
+                        if (!clip.isNullOrEmpty() && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
+                            val text = field.text.substring(0, a) + clip + field.text.substring(b)
+                            publish(text, MarkEdits.shift(marks, field.text, text), TextRange(a + clip.length))
+                        } else if (!clip.isNullOrEmpty() && !hiddenUnlocked) {
+                            onRequestUnlock()
+                        }
+                        menuVisible = false
+                    },
                     onMore = { menuOverflow = true },
                     onDismiss = {
                         menuVisible = false
@@ -976,6 +989,16 @@ private fun TableCellEditor(
                     onItalic = { apply(MarkStyle.ITALIC) },
                     onStrike = { apply(MarkStyle.STRIKE) },
                     onUnderline = { apply(MarkStyle.UNDERLINE) },
+                    onPlain = {
+                        val a = field.selection.min
+                        val b = field.selection.max
+                        if (a != b && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
+                            onChange(NoteTables.withCellMarks(table, row, col, MarkEdits.clear(marks, a, b)))
+                        } else if (a != b && !hiddenUnlocked) {
+                            onRequestUnlock()
+                        }
+                        menuVisible = false
+                    },
                 )
             }
         }

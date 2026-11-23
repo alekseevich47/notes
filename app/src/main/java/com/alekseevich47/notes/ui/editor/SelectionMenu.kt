@@ -2,6 +2,14 @@ package com.alekseevich47.notes.ui.editor
 
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -21,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
@@ -43,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.ui.components.softShadowPadding
 import com.alekseevich47.notes.ui.components.softShadowRoom
 import com.alekseevich47.notes.ui.components.softShadowSteps
@@ -52,8 +63,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Telegram-style selection bubble. Primary row is Cut / Copy / overflow.
- * Overflow starts with «Выбрать всё», then hidden text and styles, then Back.
+ * Telegram-style selection bubble. Primary row is Cut / Copy / Paste / overflow.
+ * Paste is shown only when the clipboard has text. The formatting list is
+ * Select all, the styles, Plain, then Back. Active styles carry a check.
  * Quote is intentionally absent.
  */
 @Composable
@@ -61,8 +73,10 @@ fun SelectionActionsPopup(
     startHandle: Rect,
     endHandle: Rect,
     overflow: Boolean,
+    activeStyles: Set<MarkStyle>,
     onCut: () -> Unit,
     onCopy: () -> Unit,
+    onPaste: () -> Unit,
     onMore: () -> Unit,
     onDismiss: () -> Unit,
     onBack: () -> Unit,
@@ -72,6 +86,7 @@ fun SelectionActionsPopup(
     onItalic: () -> Unit,
     onStrike: () -> Unit,
     onUnderline: () -> Unit,
+    onPlain: () -> Unit,
 ) {
     val density = LocalDensity.current
     val gapPx = with(density) { 10.dp.roundToPx() }
@@ -120,18 +135,46 @@ fun SelectionActionsPopup(
                 .background(plate),
         ) {
             KeepMenuAboveHandles()
-            if (overflow) {
-                OverflowMenu(
-                    onHidden = onHidden,
-                    onSelectAll = onSelectAll,
-                    onBold = onBold,
-                    onItalic = onItalic,
-                    onStrike = onStrike,
-                    onUnderline = onUnderline,
-                    onBack = onBack,
-                )
-            } else {
-                PrimaryMenu(onCut = onCut, onCopy = onCopy, onMore = onMore)
+            val canPaste = LocalClipboardManager.current.hasText()
+            AnimatedContent(
+                targetState = overflow,
+                transitionSpec = {
+                    val forward = targetState
+                    val slide = tween<IntOffset>(180)
+                    val fade = tween<Float>(180)
+                    val enter = fadeIn(fade) + slideInHorizontally(slide) { width ->
+                        if (forward) width else -width
+                    }
+                    val exit = fadeOut(fade) + slideOutHorizontally(slide) { width ->
+                        if (forward) -width else width
+                    }
+                    (enter togetherWith exit).using(
+                        SizeTransform(clip = false) { _, _ -> tween(180) },
+                    )
+                },
+                label = "selection-menu",
+            ) { formatting ->
+                if (formatting) {
+                    OverflowMenu(
+                        activeStyles = activeStyles,
+                        onHidden = onHidden,
+                        onSelectAll = onSelectAll,
+                        onBold = onBold,
+                        onItalic = onItalic,
+                        onStrike = onStrike,
+                        onUnderline = onUnderline,
+                        onPlain = onPlain,
+                        onBack = onBack,
+                    )
+                } else {
+                    PrimaryMenu(
+                        canPaste = canPaste,
+                        onCut = onCut,
+                        onCopy = onCopy,
+                        onPaste = onPaste,
+                        onMore = onMore,
+                    )
+                }
             }
         }
     }
@@ -244,13 +287,16 @@ private fun liftSelectionMenuWindow(root: View): Boolean {
 
 @Composable
 private fun PrimaryMenu(
+    canPaste: Boolean,
     onCut: () -> Unit,
     onCopy: () -> Unit,
+    onPaste: () -> Unit,
     onMore: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
         BubbleLabel("Вырезать", onCut)
         BubbleLabel("Копировать", onCopy)
+        if (canPaste) BubbleLabel("Вставить", onPaste)
         Box(
             modifier = Modifier
                 .padding(horizontal = 4.dp)
@@ -292,12 +338,14 @@ private fun BubbleLabel(text: String, onClick: () -> Unit) {
 
 @Composable
 private fun OverflowMenu(
+    activeStyles: Set<MarkStyle>,
     onHidden: () -> Unit,
     onSelectAll: () -> Unit,
     onBold: () -> Unit,
     onItalic: () -> Unit,
     onStrike: () -> Unit,
     onUnderline: () -> Unit,
+    onPlain: () -> Unit,
     onBack: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.widthIn(min = 212.dp, max = 280.dp)) {
@@ -309,12 +357,13 @@ private fun OverflowMenu(
                 .heightIn(max = menuMax)
                 .verticalScroll(rememberScrollState()),
         ) {
-        OverflowLabel("Выбрать всё", onSelectAll)
-        OverflowLabel("Скрытый", onHidden)
-        OverflowLabel("Жирный", onBold)
-        OverflowLabel("Курсив", onItalic)
-        OverflowLabel("Зачёркнутый", onStrike)
-        OverflowLabel("Подчёркнутый", onUnderline)
+        OverflowLabel("Выбрать всё", onClick = onSelectAll)
+        OverflowLabel("Жирный", checked = MarkStyle.BOLD in activeStyles, onClick = onBold)
+        OverflowLabel("Курсив", checked = MarkStyle.ITALIC in activeStyles, onClick = onItalic)
+        OverflowLabel("Зачёркнутый", checked = MarkStyle.STRIKE in activeStyles, onClick = onStrike)
+        OverflowLabel("Подчёркнутый", checked = MarkStyle.UNDERLINE in activeStyles, onClick = onUnderline)
+        OverflowLabel("Скрытый", checked = MarkStyle.HIDDEN in activeStyles, onClick = onHidden)
+        OverflowLabel("Обычный", onClick = onPlain)
         Box(
             Modifier
                 .padding(top = 2.dp)
@@ -349,16 +398,33 @@ private fun OverflowMenu(
 }
 
 @Composable
-private fun OverflowLabel(text: String, onClick: () -> Unit) {
-    Text(
-        text,
+private fun OverflowLabel(
+    text: String,
+    checked: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 12.dp),
-        fontFamily = NotesFont,
-        fontWeight = FontWeight.Medium,
-        fontSize = 16.sp,
-        color = MaterialTheme.colorScheme.onSurface,
-    )
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            modifier = Modifier.weight(1f),
+            fontFamily = NotesFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        if (checked) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
 }

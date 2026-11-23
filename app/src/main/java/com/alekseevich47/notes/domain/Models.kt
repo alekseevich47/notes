@@ -1163,6 +1163,25 @@ object MarkEdits {
         return merge(next)
     }
 
+    /**
+     * Removes every style that overlaps [start, end). A mark that crosses either
+     * boundary is split there, the same way [toggle] cuts one style.
+     */
+    fun clear(marks: List<TextMark>, start: Int, end: Int): List<TextMark> {
+        if (end <= start) return marks
+        val next = marks.flatMap { mark ->
+            if (mark.end <= start || mark.start >= end) {
+                listOf(mark)
+            } else {
+                buildList {
+                    if (mark.start < start) add(mark.copy(end = start))
+                    if (mark.end > end) add(mark.copy(start = end))
+                }
+            }
+        }
+        return merge(next)
+    }
+
     private fun merge(marks: List<TextMark>): List<TextMark> {
         return marks
             .filter { it.end > it.start }
