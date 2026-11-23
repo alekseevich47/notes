@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -57,6 +58,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -196,14 +198,37 @@ fun EditorScreen(
         if (current == null) {
             Text("Открываю…", modifier = Modifier.padding(20.dp), fontFamily = NotesFont)
         } else {
+            val flow = remember(current.document) { NoteDocuments.flow(current.document) }
+            val structure = remember(flow) { flow.count { it.kind == BlockKind.TABLE } to flow.size }
+            val lastText = remember(flow) { flow.indexOfLast { it.kind == BlockKind.TEXT } }
+            val requesters = remember(current.id, structure) { List(flow.size) { FocusRequester() } }
+            val focusFirstTextBlock = {
+                val index = flow.indexOfFirst { it.kind == BlockKind.TEXT }
+                if (index >= 0) {
+                    caretRequest = CaretRequest(
+                        token = caretRequest.token + 1,
+                        blockIndex = index,
+                        offset = 0,
+                    )
+                    runCatching { requesters[index].requestFocus() }
+                }
+            }
             BasicTextField(
                 value = current.title,
-                onValueChange = viewModel::setTitle,
+                onValueChange = { raw ->
+                    val stripped = raw.replace("\n", "")
+                    viewModel.setTitle(stripped)
+                    if ('\n' in raw) focusFirstTextBlock()
+                },
                 readOnly = unreadable,
+                singleLine = false,
+                maxLines = 3,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     autoCorrectEnabled = true,
+                    imeAction = ImeAction.Next,
                 ),
+                keyboardActions = KeyboardActions(onNext = { focusFirstTextBlock() }),
                 textStyle = MaterialTheme.typography.headlineMedium.copy(
                     fontFamily = NotesFont,
                     fontWeight = FontWeight.Bold,
@@ -230,10 +255,6 @@ fun EditorScreen(
                     .fillMaxWidth(),
             ) {
                 val minBody = maxHeight
-                val flow = remember(current.document) { NoteDocuments.flow(current.document) }
-                val structure = remember(flow) { flow.count { it.kind == BlockKind.TABLE } to flow.size }
-                val lastText = remember(flow) { flow.indexOfLast { it.kind == BlockKind.TEXT } }
-                val requesters = remember(current.id, structure) { List(flow.size) { FocusRequester() } }
                 val noteNow = rememberUpdatedState(current)
                 val viewModelNow = rememberUpdatedState(viewModel)
                 val toastNow = rememberUpdatedState(onToast)
