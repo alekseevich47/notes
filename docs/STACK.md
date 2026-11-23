@@ -18,7 +18,7 @@
 
 Kotlin, Jetpack Compose, Material 3, Manrope, Hilt, Room, EncryptedSharedPreferences, OkHttp, Media3 (ExoPlayer + MediaSession), WorkManager, Accompanist permissions, Haze 1.5.2.
 
-Стекло нижнего меню — `LiquidGlassPlate`: Haze blur и полупрозрачная заливка. AGSL / RenderEffect не используем: на Tecno/HiOS он ломает композитинг. Кнопка микрофона 88dp выше плашки 62dp и выступает вверх и вниз.
+Стекло нижнего меню — `LiquidGlassPlate`: Haze blur и полупрозрачная заливка. AGSL / RenderEffect не используем: на Tecno/HiOS он ломает композитинг. Кнопка микрофона 88dp выше плашки 62dp и выступает вверх и вниз. Кнопка «+» на своей плите ставит `blur = false` и не блюрит себя. Нижняя плашка блюр оставляет.
 
 ## Речь
 
@@ -27,6 +27,8 @@ Kotlin, Jetpack Compose, Material 3, Manrope, Hilt, Room, EncryptedSharedPrefere
 3. AAR `sherpa-onnx-2.0.1.aar` качается в `app/libs/` на этапе конфигурации Gradle и не попадает в git.
 4. Источники файлов: Hugging Face `csukuangfj/sherpa-onnx-streaming-t-one-russian-2025-09-08` и `Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx`.
 5. Аудио: PCM 16 кГц моно в WAV (`filesDir/recordings`), короткий тихий beep перед стартом.
+
+Выбор распознавателя не остаётся на T-one, пока модель не установлена и не включена. Иначе эффективное значение — system (`RecognizerChoice`).
 
 ## Загрузка моделей
 
@@ -42,9 +44,15 @@ PIN хранится только как SHA-256(pepper || pin) в EncryptedShar
 
 Нижнее стекло: Заметки / микрофон / Настройки. Состояния микрофона: IDLE (контур и тихая фиолетовая волна), RECORDING (заливка по уровню и glow), PROCESSING (три точки), DONE (галочка). После стопа открывается редактор.
 
-Редактор: жирный, курсив, зачёркнутый, подчёркнутый, скрытый (мозаика поверх текста того же цвета, без AGSL; тап открывает свой PIN), нумерованные списки (`ListAutoFormat`), таблицы rows×cols с сеткой выбора размера и редактируемыми ячейками. Диалоги и тосты свои, не системные. Календарь — свой month grid, не `DatePickerDialog`.
+Редактор: жирный, курсив, зачёркнутый, подчёркнутый, скрытый (мозаика поверх текста того же цвета, без AGSL; тап открывает свой PIN), нумерованные списки (`ListAutoFormat`), таблицы rows×cols с сеткой выбора размера и редактируемыми ячейками. Диалоги и тосты свои, не системные. Календарь — свой month grid, не `DatePickerDialog`. Меню выделения — одна рамка `SelectionBubble`. Положение считается по `reserve`: размер измеряется с обеих страниц, чтобы окно не прыгало. Вставка идёт через `PasteActionPopup`, не через системный тулбар.
 
-Тема: около-белый светлый фон и тёмная схема, переключатель в настройках (система / светлая / тёмная). The theme is read from plain NotesPrefs.
+Список заметок показывает время создания. Кэш превью по-прежнему ключуется по `updatedAt`.
+
+Тема: светлая или тёмная. Сохранённое `SYSTEM` один раз разрешается по теме устройства при первом запуске этой версии и дальше не меняется. The theme is read from plain NotesPrefs.
+
+При первом запуске `InfoNoticeStore` показывает «Информация». «Продолжить» сохраняет согласие с `TermsOfUse` версии 1.0. В настройках тот же текст открывает пункт «Правила использования».
+
+«Сообщить об ошибке» открывает почтовое приложение пользователя. SMTP и секрета в приложении нет. Скриншоты перекодируются в JPEG без EXIF. Технический журнал прилагается по желанию.
 
 ## Виджеты и сервисы
 
@@ -54,10 +62,10 @@ PIN хранится только как SHA-256(pepper || pin) в EncryptedShar
 
 ## Журнал
 
-Логи — только через `AppLog`, `android.util.Log` в коде приложения не использовать (зеркало внутри `AppLog` — исключение).
+Логи идут только через `AppLog`. `android.util.Log` в коде приложения не используется, кроме зеркала внутри `AppLog`. Шапка процесса содержит память, диск, модели, разрешения, батарею и тему. На старте процесса в тело пишется маркер `===== process start pid=… session=… =====`. На API 30+ туда же попадают причины прошлых завершений.
 
 ## CI
 
-`.github/workflows/android.yml`: JDK 17, SDK 35, `testDebugUnitTest`, `assembleDebug`, `assembleOptimized`, артефакты `notes-debug-apk` и `notes-optimized-apk`.
+`.github/workflows/android.yml`: JDK 17, SDK 35, `testDebugUnitTest`, `assembleDebug`, `assembleOptimized`, артефакты `notes-debug-apk`, `notes-optimized-apk` и `notes-optimized-mapping`.
 
 Стеки optimized расшифровываются командой `retrace mapping.txt trace.txt` (R8 retrace из cmdline-tools); mapping — артефакт `notes-optimized-mapping`.

@@ -34,6 +34,7 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
 3. артефакт `notes-debug-apk` (`app/build/outputs/apk/debug/*.apk`)
 4. `assembleOptimized`
 5. артефакт `notes-optimized-apk` (`app/build/outputs/apk/optimized/*.apk`)
+6. артефакт `notes-optimized-mapping` (`app/build/outputs/mapping/optimized/mapping.txt`)
 
 ## Тесты
 
