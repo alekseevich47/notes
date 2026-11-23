@@ -1216,6 +1216,12 @@ object MarkEdits {
         return merge(cut + added)
     }
 
+    /** Adds [extra] and joins spans of the same style that touch. */
+    fun include(marks: List<TextMark>, extra: List<TextMark>): List<TextMark> {
+        if (extra.isEmpty()) return marks
+        return merge(marks + extra)
+    }
+
     private fun merge(marks: List<TextMark>): List<TextMark> {
         return marks
             .filter { it.end > it.start }

@@ -45,6 +45,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
+import android.content.ClipboardManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
@@ -69,6 +70,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
@@ -189,7 +191,9 @@ internal fun RichNoteEditor(
     var blockMenu by remember { mutableStateOf(false) }
     val prompt = remember { HiddenPromptGuard() }
     val clipboard = LocalClipboardManager.current
+    val platformClipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
     val platformToolbar = LocalTextToolbar.current
+    lateinit var applyIncoming: (TextFieldValue) -> Unit
     val toolbar = remember { RoutingTextToolbar(platformToolbar) }
     val ink = MaterialTheme.colorScheme.onSurface
     val censor = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }
@@ -329,6 +333,18 @@ internal fun RichNoteEditor(
         return HiddenText.cursorInside(marks, field.selection.start, field.selection.end)
     }
 
+    fun stashCopy(source: String, start: Int, end: Int) {
+        val fragment = source.substring(start, end)
+        val clipped = RichClip.clip(marks, start, end)
+        RichClip.put(fragment, clipped)
+        writeSelectionClipboard(
+            composeClipboard = clipboard,
+            platformClipboard = platformClipboard,
+            text = fragment,
+            sensitive = RichClip.containsHidden(clipped),
+        )
+    }
+
     fun copySelection() {
         val start = field.selection.min
         val end = field.selection.max
@@ -337,7 +353,7 @@ internal fun RichNoteEditor(
             requestUnlock()
             return
         }
-        clipboard.setText(AnnotatedString(field.text.substring(start, end)))
+        stashCopy(field.text, start, end)
         hideMenu()
     }
 
@@ -350,7 +366,7 @@ internal fun RichNoteEditor(
             return
         }
         val previous = field.text
-        clipboard.setText(AnnotatedString(previous.substring(start, end)))
+        stashCopy(previous, start, end)
         val proposed = previous.removeRange(start, end)
         publish(previous, ListAutoFormat.afterEdit(previous, proposed, start, listStart))
         hideMenu()
@@ -367,13 +383,8 @@ internal fun RichNoteEditor(
             requestUnlock()
             return
         }
-        val previous = field.text
-        val proposed = previous.substring(0, start) + clip + previous.substring(end)
-        val cursor = start + clip.length
-        publish(
-            previous,
-            ListAutoFormat.afterEdit(previous, proposed, cursor, listStart, composing = false),
-        )
+        val proposed = field.text.substring(0, start) + clip + field.text.substring(end)
+        applyIncoming(TextFieldValue(proposed, TextRange((start + clip.length).coerceAtMost(proposed.length))))
         hideMenu()
     }
 
@@ -503,86 +514,93 @@ internal fun RichNoteEditor(
     Column(modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth()) {
             CompositionLocalProvider(LocalTextToolbar provides toolbar) {
+                applyIncoming = incoming@{ next ->
+                    if (readOnly) return@incoming
+                    val previous = field.text
+                    val previousSelection = field.selection
+                    if (blockMenu && next.text == previous) {
+                        field = field.copy(selection = previousSelection)
+                        hideMenu()
+                        return@incoming
+                    }
+                    if (blockMenu) blockMenu = false
+                    val textHitsHidden = HiddenText.editTouches(marks, previous, next.text)
+                    val cursorInHidden = HiddenText.cursorInside(
+                        marks,
+                        next.selection.start,
+                        next.selection.end,
+                    )
+                    if (!hiddenUnlocked && textHitsHidden) {
+                        requestUnlock()
+                        return@incoming
+                    }
+                    if (!cursorInHidden && !prompt.dialogOpen) prompt.armed = true
+                    if (!hiddenUnlocked && cursorInHidden && prompt.armed && !prompt.dialogOpen) {
+                        requestUnlock()
+                    }
+                    val edit = ListAutoFormat.afterEdit(
+                        previous,
+                        next.text,
+                        next.selection.end,
+                        listStart,
+                        composing = next.composition != null,
+                    )
+                    val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
+                    field = if (edit.text != next.text) {
+                        TextFieldValue(edit.text, selection, composition = null)
+                    } else {
+                        next.copy(text = edit.text, selection = selection)
+                    }
+                    fieldNow.current = field
+                    if (edit.text != previous) {
+                        toolbar.suppressPlatform = false
+                        releasePlatformMenu = false
+                        if (blockFocused) pendingReveal = true
+                    }
+                    // The menu waits for finger-up. Compose asks the toolbar to show only
+                    // after the selection gesture ends; showing here covers the magnifier.
+                    if (selection.collapsed) hideMenu()
+                    val slice = textInsertion(previous, edit.text)
+                    val shifted = MarkEdits.shift(marks, previous, edit.text)
+                    var nextMarks = shifted
+                    var kind = EditHistory.kindForTextChange(previous, next.text, edit.text)
+                    if (slice != null) {
+                        val pasted = RichClip.match(edit.text.substring(slice.start, slice.end))
+                        if (pasted != null) {
+                            nextMarks = RichClip.overlay(nextMarks, slice.start, pasted)
+                            kind = EditKind.STRUCTURE
+                        }
+                    }
+                    if (
+                        slice != null &&
+                        previousSelection.collapsed &&
+                        previous.length + (slice.end - slice.start) == edit.text.length
+                    ) {
+                        nextMarks = MarkEdits.applyTyping(
+                            nextMarks,
+                            slice.start,
+                            slice.end,
+                            formats.pendingOn,
+                            formats.pendingOff,
+                        )
+                    }
+                    if (edit.text == previous && selection != previousSelection) {
+                        clearPendingStyles()
+                    }
+                    onDocument(
+                        edit.text,
+                        nextMarks,
+                        kind,
+                        previousSelection.end,
+                        selection.end,
+                    )
+                    val ready = layout
+                    if (ready != null) scheduleReveal(ready)
+                }
                 BasicTextField(
                     value = field,
                     readOnly = readOnly,
-                    onValueChange = { next ->
-                        if (readOnly) return@BasicTextField
-                        val previous = field.text
-                        val previousSelection = field.selection
-                        if (blockMenu && next.text == previous) {
-                            field = field.copy(selection = previousSelection)
-                            hideMenu()
-                            return@BasicTextField
-                        }
-                        if (blockMenu) blockMenu = false
-                        val textHitsHidden = HiddenText.editTouches(marks, previous, next.text)
-                        val cursorInHidden = HiddenText.cursorInside(
-                            marks,
-                            next.selection.start,
-                            next.selection.end,
-                        )
-                        if (!hiddenUnlocked && textHitsHidden) {
-                            requestUnlock()
-                            return@BasicTextField
-                        }
-                        if (!cursorInHidden && !prompt.dialogOpen) prompt.armed = true
-                        if (!hiddenUnlocked && cursorInHidden && prompt.armed && !prompt.dialogOpen) {
-                            requestUnlock()
-                        }
-                        val edit = ListAutoFormat.afterEdit(
-                            previous,
-                            next.text,
-                            next.selection.end,
-                            listStart,
-                            composing = next.composition != null,
-                        )
-                        val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
-                        field = if (edit.text != next.text) {
-                            TextFieldValue(edit.text, selection, composition = null)
-                        } else {
-                            next.copy(text = edit.text, selection = selection)
-                        }
-                        fieldNow.current = field
-                        if (edit.text != previous) {
-                            toolbar.suppressPlatform = false
-                            releasePlatformMenu = false
-                            if (blockFocused) pendingReveal = true
-                        }
-                        // The menu waits for finger-up. Compose asks the toolbar to show only
-                        // after the selection gesture ends; showing here covers the magnifier.
-                        if (selection.collapsed) hideMenu()
-                        val kind = EditHistory.kindForTextChange(previous, next.text, edit.text)
-                        val shifted = MarkEdits.shift(marks, previous, edit.text)
-                        val inserted = if (previousSelection.collapsed) {
-                            pureInsertion(previous, edit.text)
-                        } else {
-                            null
-                        }
-                        val nextMarks = if (inserted != null) {
-                            MarkEdits.applyTyping(
-                                shifted,
-                                inserted.first,
-                                inserted.second,
-                                formats.pendingOn,
-                                formats.pendingOff,
-                            )
-                        } else {
-                            shifted
-                        }
-                        if (edit.text == previous && selection != previousSelection) {
-                            clearPendingStyles()
-                        }
-                        onDocument(
-                            edit.text,
-                            nextMarks,
-                            kind,
-                            previousSelection.end,
-                            selection.end,
-                        )
-                        val ready = layout
-                        if (ready != null) scheduleReveal(ready)
-                    },
+                    onValueChange = { applyIncoming(it) },
                     onTextLayout = { result ->
                         val previousLayout = layout
                         if (
@@ -787,34 +805,6 @@ private fun bandsFor(layout: TextLayoutResult, start: Int, end: Int): List<Selec
         lineRight = { layout.getLineRight(it) },
         xForOffset = { offset -> layout.getHorizontalPosition(offset.coerceIn(0, length), true) },
     )
-}
-
-/**
- * A pure insertion in the new text, or null when the edit also deleted
- * or replaced characters. The range is [start, end) in [after].
- */
-private fun pureInsertion(before: String, after: String): Pair<Int, Int>? {
-    if (after.length <= before.length) return null
-    val prefix = sharedPrefixLength(before, after)
-    var suffix = 0
-    val limit = minOf(before.length - prefix, after.length - prefix)
-    while (
-        suffix < limit &&
-        before[before.length - 1 - suffix] == after[after.length - 1 - suffix]
-    ) {
-        suffix++
-    }
-    val oldEnd = before.length - suffix
-    val newEnd = after.length - suffix
-    if (oldEnd != prefix || newEnd <= prefix) return null
-    return prefix to newEnd
-}
-
-private fun sharedPrefixLength(left: String, right: String): Int {
-    val limit = minOf(left.length, right.length)
-    var index = 0
-    while (index < limit && left[index] == right[index]) index++
-    return index
 }
 
 private fun stylesTouching(marks: List<TextMark>, selection: TextRange): Set<MarkStyle> {

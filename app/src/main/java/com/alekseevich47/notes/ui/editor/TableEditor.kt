@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.ui.editor
 
+import android.content.ClipboardManager
 import android.view.ActionMode
 import android.view.View
 import androidx.activity.compose.BackHandler
@@ -76,6 +77,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.LocalView
@@ -782,6 +784,7 @@ private fun TableCellEditor(
     var menuVisible by remember { mutableStateOf(false) }
     var menuOverflow by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+    val platformClipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
     val platformToolbar = LocalTextToolbar.current
     val toolbar = remember { RoutingTextToolbar(platformToolbar) }
     val prompt = remember { CellPrompt() }
@@ -802,6 +805,41 @@ private fun TableCellEditor(
         var next = NoteTables.withCell(table, row, col, text)
         next = NoteTables.withCellMarks(next, row, col, nextMarks)
         onChange(next)
+    }
+    fun stashCopy(source: String, start: Int, end: Int) {
+        val fragment = source.substring(start, end)
+        val clipped = RichClip.clip(marks, start, end)
+        RichClip.put(fragment, clipped)
+        writeSelectionClipboard(
+            composeClipboard = clipboard,
+            platformClipboard = platformClipboard,
+            text = fragment,
+            sensitive = RichClip.containsHidden(clipped),
+        )
+    }
+    fun commit(next: TextFieldValue) {
+        if (readOnly) return
+        val previous = field.text
+        if (!hiddenUnlocked && HiddenText.editTouches(marks, previous, next.text)) {
+            onRequestUnlock()
+            return
+        }
+        val cursorHidden = HiddenText.cursorInside(marks, next.selection.start, next.selection.end)
+        if (!hiddenUnlocked && cursorHidden && !prompt.open) onRequestUnlock()
+        val shifted = if (next.text == previous) marks else MarkEdits.shift(marks, previous, next.text)
+        val slice = textInsertion(previous, next.text)
+        val pasted = if (slice == null) null else RichClip.match(next.text.substring(slice.start, slice.end))
+        val nextMarks = if (pasted != null && slice != null) {
+            RichClip.overlay(shifted, slice.start, pasted)
+        } else {
+            shifted
+        }
+        field = next
+        if (next.selection.collapsed) {
+            menuVisible = false
+            menuOverflow = false
+        }
+        if (next.text != value || nextMarks != marks) publish(next.text, nextMarks, next.selection)
     }
     fun apply(style: MarkStyle) {
         val start = field.selection.min
@@ -893,23 +931,7 @@ private fun TableCellEditor(
             BasicTextField(
                 value = field,
                 readOnly = readOnly,
-                onValueChange = { next ->
-                    if (readOnly) return@BasicTextField
-                    val previous = field.text
-                    if (!hiddenUnlocked && HiddenText.editTouches(marks, previous, next.text)) {
-                        onRequestUnlock()
-                        return@BasicTextField
-                    }
-                    val cursorHidden = HiddenText.cursorInside(marks, next.selection.start, next.selection.end)
-                    if (!hiddenUnlocked && cursorHidden && !prompt.open) onRequestUnlock()
-                    val shifted = if (next.text == previous) marks else MarkEdits.shift(marks, previous, next.text)
-                    field = next
-                    if (next.selection.collapsed) {
-                        menuVisible = false
-                        menuOverflow = false
-                    }
-                    if (next.text != value || shifted != marks) publish(next.text, shifted, next.selection)
-                },
+                onValueChange = { commit(it) },
                 onTextLayout = { layout = it },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -941,7 +963,7 @@ private fun TableCellEditor(
                         val a = field.selection.min
                         val b = field.selection.max
                         if (a != b && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
-                            clipboard.setText(AnnotatedString(field.text.substring(a, b)))
+                            stashCopy(field.text, a, b)
                             val text = field.text.removeRange(a, b)
                             publish(text, MarkEdits.shift(marks, field.text, text), TextRange(a))
                         } else if (!hiddenUnlocked) {
@@ -953,7 +975,7 @@ private fun TableCellEditor(
                         val a = field.selection.min
                         val b = field.selection.max
                         if (a != b && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
-                            clipboard.setText(AnnotatedString(field.text.substring(a, b)))
+                            stashCopy(field.text, a, b)
                         } else if (!hiddenUnlocked) {
                             onRequestUnlock()
                         }
@@ -965,7 +987,7 @@ private fun TableCellEditor(
                         val b = field.selection.max
                         if (!clip.isNullOrEmpty() && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
                             val text = field.text.substring(0, a) + clip + field.text.substring(b)
-                            publish(text, MarkEdits.shift(marks, field.text, text), TextRange(a + clip.length))
+                            commit(TextFieldValue(text, TextRange((a + clip.length).coerceAtMost(text.length))))
                         } else if (!clip.isNullOrEmpty() && !hiddenUnlocked) {
                             onRequestUnlock()
                         }
