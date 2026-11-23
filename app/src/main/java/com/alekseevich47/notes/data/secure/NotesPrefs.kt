@@ -13,6 +13,7 @@ object NotesPrefs {
     const val RECOGNIZER = "recognizer"
     const val RECOGNIZER_TONE = "tone"
     const val RECOGNIZER_SYSTEM = "system"
+    const val SEARCH_INDEX_V2 = "search_index_v2"
 
     fun open(context: Context): SharedPreferences {
         return context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)

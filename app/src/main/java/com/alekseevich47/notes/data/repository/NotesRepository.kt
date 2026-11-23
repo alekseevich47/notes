@@ -1,12 +1,19 @@
 package com.alekseevich47.notes.data.repository
 
+import android.content.Context
 import com.alekseevich47.notes.data.local.NoteDao
 import com.alekseevich47.notes.data.local.NoteEntity
+import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteDocuments
+import com.alekseevich47.notes.log.AppLog
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 import javax.inject.Inject
@@ -15,6 +22,7 @@ import javax.inject.Singleton
 @Singleton
 class NotesRepository @Inject constructor(
     private val dao: NoteDao,
+    @ApplicationContext private val context: Context,
 ) {
     fun observe(query: String, fromMs: Long?, toMs: Long?): Flow<List<Note>> {
         val needle = query.trim().lowercase(Locale.getDefault())
@@ -75,6 +83,29 @@ class NotesRepository @Inject constructor(
         dao.update(updated)
     }
 
+    /**
+     * Rewrites searchBlob once so hidden spans indexed by older builds drop out.
+     * The prefs flag is set only after every row is updated.
+     */
+    suspend fun reindexSearchIfNeeded() {
+        withContext(Dispatchers.IO) {
+            val prefs = NotesPrefs.open(context)
+            if (prefs.getBoolean(NotesPrefs.SEARCH_INDEX_V2, false)) return@withContext
+            try {
+                val rows = dao.all()
+                for (row in rows) {
+                    val blob = NoteDocuments.searchBlob(row.title, NoteDocuments.decode(row.body))
+                    dao.updateSearchBlob(row.id, blob)
+                }
+                prefs.edit().putBoolean(NotesPrefs.SEARCH_INDEX_V2, true).commit()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                AppLog.e(TAG, "search reindex failed", error)
+            }
+        }
+    }
+
     suspend fun delete(id: Long) {
         val row = dao.get(id)
         row?.audioPath?.let { path -> runCatching { File(path).delete() } }
@@ -91,4 +122,8 @@ class NotesRepository @Inject constructor(
         seq = seq,
         searchBlob = searchBlob,
     )
+
+    private companion object {
+        const val TAG = "Notes"
+    }
 }

@@ -32,4 +32,10 @@ interface NoteDao {
 
     @Query("SELECT COALESCE(MAX(seq), 0) FROM notes")
     suspend fun maxSeq(): Int
+
+    @Query("SELECT * FROM notes")
+    suspend fun all(): List<NoteEntity>
+
+    @Query("UPDATE notes SET searchBlob = :searchBlob WHERE id = :id")
+    suspend fun updateSearchBlob(id: Long, searchBlob: String)
 }

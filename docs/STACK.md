@@ -34,7 +34,7 @@ Kotlin, Jetpack Compose, Material 3, Manrope, Hilt, Room, EncryptedSharedPrefere
 
 ## Данные и PIN
 
-Room: title, JSON-документ (текст, спаны, таблицы), searchBlob в нижнем регистре, путь к WAV, seq. Поиск фильтрует уже lower-case строку, поэтому кириллица ищется без SQL NOCASE.
+Room: title, JSON-документ (текст, спаны, таблицы), searchBlob в нижнем регистре, путь к WAV, seq. Поиск фильтрует уже lower-case строку, поэтому кириллица ищется без SQL NOCASE. searchBlob не включает символы внутри спанов HIDDEN.
 
 PIN хранится только как SHA-256(pepper || pin) в EncryptedSharedPreferences. Сервисный сброс — константа `PinHasher.SERVICE_RESET_HASH`, цифры в исходниках не лежат.
 

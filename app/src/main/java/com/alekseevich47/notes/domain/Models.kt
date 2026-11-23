@@ -297,8 +297,51 @@ object NoteDocuments {
     }
 
     fun searchBlob(title: String, document: NoteDocument): String {
-        return (title + "\n" + plainText(document))
+        return (title + "\n" + visiblePlain(document))
             .lowercase(Locale.getDefault())
+    }
+
+    /** Title and visible text. HIDDEN characters are removed, not masked. */
+    private fun visiblePlain(document: NoteDocument): String {
+        val builder = StringBuilder()
+        for (block in flow(document)) {
+            when (block.kind) {
+                BlockKind.TEXT -> appendParagraph(builder, withoutHidden(block.text, block.marks))
+                BlockKind.TABLE -> block.table?.let { appendVisibleTable(builder, it) }
+            }
+        }
+        return builder.toString()
+    }
+
+    private fun appendVisibleTable(builder: StringBuilder, table: NoteTable) {
+        if (table.caption.isNotBlank()) {
+            if (builder.isNotEmpty() && !builder.endsWith('\n')) builder.append('\n')
+            builder.append(table.caption)
+        }
+        table.cells.forEachIndexed { row, cells ->
+            if (builder.isNotEmpty() && !builder.endsWith('\n')) builder.append('\n')
+            val visible = cells.mapIndexed { col, cell ->
+                withoutHidden(cell, NoteTables.cellMarks(table, row, col))
+            }
+            builder.append(visible.joinToString(" | "))
+        }
+        if (table.cells.isNotEmpty() && !builder.endsWith('\n')) builder.append('\n')
+    }
+
+    private fun withoutHidden(text: String, marks: List<TextMark>): String {
+        if (text.isEmpty() || marks.none { it.style == MarkStyle.HIDDEN && it.end > it.start }) return text
+        val hidden = BooleanArray(text.length)
+        for (mark in marks) {
+            if (mark.style != MarkStyle.HIDDEN) continue
+            val from = mark.start.coerceIn(0, text.length)
+            val to = mark.end.coerceIn(from, text.length)
+            for (index in from until to) hidden[index] = true
+        }
+        val out = StringBuilder(text.length)
+        for (index in text.indices) {
+            if (!hidden[index]) out.append(text[index])
+        }
+        return out.toString()
     }
 
     fun preview(document: NoteDocument, maxChars: Int = 96): String {
