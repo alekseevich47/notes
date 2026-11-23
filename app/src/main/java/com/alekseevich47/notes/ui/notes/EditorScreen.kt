@@ -63,7 +63,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.BlockKind
+import com.alekseevich47.notes.domain.EditKind
 import com.alekseevich47.notes.domain.NoteBlock
 import com.alekseevich47.notes.domain.NoteDocuments
 import com.alekseevich47.notes.domain.TextMark
@@ -117,6 +119,15 @@ fun EditorScreen(
     var insertBlock by remember { mutableIntStateOf(0) }
     var insertCursor by remember { mutableIntStateOf(0) }
     var caretRequest by remember { mutableStateOf(CaretRequest()) }
+    val caretJump by viewModel.caretJump.collectAsStateWithLifecycle()
+    LaunchedEffect(caretJump?.token) {
+        val jump = caretJump ?: return@LaunchedEffect
+        caretRequest = CaretRequest(
+            token = caretRequest.token + 1,
+            blockIndex = jump.caret.blockIndex,
+            offset = jump.caret.offset,
+        )
+    }
     val surface = remember { NoteSurfaceBridge() }
     var bodyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     SideEffect {
@@ -236,9 +247,25 @@ fun EditorScreen(
                         askTable = true
                     }
                 }
-                val onBlockText = remember { { index: Int, text: String, marks: List<TextMark> ->
-                    viewModelNow.value.setBlockText(index, text, marks)
-                } }
+                val onBlockText = remember {
+                    {
+                            index: Int,
+                            text: String,
+                            marks: List<TextMark>,
+                            kind: EditKind,
+                            before: Int,
+                            after: Int,
+                        ->
+                        viewModelNow.value.setBlockText(
+                            index,
+                            text,
+                            marks,
+                            kind,
+                            BlockCaret(index, before),
+                            BlockCaret(index, after),
+                        )
+                    }
+                }
                 val onDeleteTableAbove = remember { { index: Int ->
                     val note = noteNow.value
                     val blocks = NoteDocuments.flow(note.document)
@@ -492,7 +519,7 @@ private fun NoteTextBlock(
     pinDialogVisible: Boolean,
     surface: NoteSurfaceBridge,
     useSharedSurface: Boolean,
-    onText: (Int, String, List<TextMark>) -> Unit,
+    onText: (Int, String, List<TextMark>, EditKind, Int, Int) -> Unit,
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
     onAskTable: () -> Unit,
@@ -505,8 +532,8 @@ private fun NoteTextBlock(
     val bridge = remember(noteId, blockIndex) { NoteSurfaceBridge() }
     val publishText = rememberUpdatedState(onText)
     val onDocument = remember(blockIndex) {
-        { nextText: String, nextMarks: List<TextMark> ->
-            publishText.value(blockIndex, nextText, nextMarks)
+        { nextText: String, nextMarks: List<TextMark>, kind: EditKind, before: Int, after: Int ->
+            publishText.value(blockIndex, nextText, nextMarks, kind, before, after)
         }
     }
     RichNoteEditor(

@@ -5,7 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
+import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.BlockKind
+import com.alekseevich47.notes.domain.EditHistory
+import com.alekseevich47.notes.domain.EditKind
+import com.alekseevich47.notes.domain.EditSnapshot
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteDocuments
@@ -32,8 +36,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.ZoneId
 import javax.inject.Inject
-
-private const val EDIT_HISTORY_LIMIT = 1000
 
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -99,6 +101,11 @@ class EditorViewModel @Inject constructor(
     private val undoStack = ArrayDeque<EditSnapshot>()
     private val redoStack = ArrayDeque<EditSnapshot>()
     private var restoringHistory = false
+    private var breakCoalesce = false
+    private var liveCaret: BlockCaret? = null
+    private var caretToken = 0
+    private val _caretJump = MutableStateFlow<CaretJump?>(null)
+    val caretJump: StateFlow<CaretJump?> = _caretJump.asStateFlow()
     private val _canUndo = MutableStateFlow(false)
     private val _canRedo = MutableStateFlow(false)
     val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
@@ -111,6 +118,9 @@ class EditorViewModel @Inject constructor(
         boundId = id
         undoStack.clear()
         redoStack.clear()
+        breakCoalesce = true
+        liveCaret = null
+        _caretJump.value = null
         refreshHistory()
         _unreadable.value = false
         // Drop the previous note before the load so the editor cannot paint it.
@@ -132,16 +142,21 @@ class EditorViewModel @Inject constructor(
         if (_unreadable.value) return
         val current = _note.value ?: return
         if (current.title == title) return
-        rememberEdit(current)
+        rememberEdit(current, EditKind.TYPING, EditHistory.inserted(current.title, title), caret = null)
         _note.value = current.copy(title = title, updatedAt = System.currentTimeMillis())
         scheduleSave()
     }
 
-    fun setDocument(document: NoteDocument) {
+    internal fun setDocument(
+        document: NoteDocument,
+        kind: EditKind = EditKind.STRUCTURE,
+        insertion: String = "",
+        caret: BlockCaret? = null,
+    ) {
         if (_unreadable.value) return
         val current = _note.value ?: return
         if (current.document == document) return
-        rememberEdit(current)
+        rememberEdit(current, kind, insertion, caret)
         _note.value = current.copy(document = document, updatedAt = System.currentTimeMillis())
         scheduleSave()
     }
@@ -156,14 +171,24 @@ class EditorViewModel @Inject constructor(
         restore(redoStack, undoStack)
     }
 
-    fun setBlockText(index: Int, text: String, marks: List<TextMark>) {
+    internal fun setBlockText(
+        index: Int,
+        text: String,
+        marks: List<TextMark>,
+        kind: EditKind = EditKind.TYPING,
+        caret: BlockCaret? = null,
+        caretAfter: BlockCaret? = null,
+    ) {
+        if (_unreadable.value) return
         val current = _note.value ?: return
         val blocks = NoteDocuments.flow(current.document).toMutableList()
         val block = blocks.getOrNull(index) ?: return
         if (block.kind != BlockKind.TEXT) return
         if (block.text == text && block.marks == marks) return
+        val insertion = EditHistory.inserted(block.text, text)
         blocks[index] = block.copy(text = text, marks = marks)
-        setDocument(NoteDocuments.pack(blocks))
+        if (caretAfter != null) liveCaret = caretAfter
+        setDocument(NoteDocuments.pack(blocks), kind, insertion, caret)
     }
 
     fun updateTable(table: NoteTable) {
@@ -209,10 +234,26 @@ class EditorViewModel @Inject constructor(
 
     fun hasPin(): Boolean = settings.hasPin
 
-    private fun rememberEdit(current: Note) {
+    private fun rememberEdit(
+        current: Note,
+        kind: EditKind,
+        insertion: String,
+        caret: BlockCaret?,
+    ) {
         if (restoringHistory) return
-        undoStack.addLast(EditSnapshot(current.title, current.document))
-        while (undoStack.size > EDIT_HISTORY_LIMIT) undoStack.removeFirst()
+        val next = EditHistory.record(
+            undo = undoStack.toList(),
+            title = current.title,
+            document = current.document,
+            kind = kind,
+            atMs = System.currentTimeMillis(),
+            insertion = insertion,
+            caret = caret,
+            forceNew = breakCoalesce,
+        )
+        breakCoalesce = false
+        undoStack.clear()
+        undoStack.addAll(next)
         redoStack.clear()
         refreshHistory()
     }
@@ -220,14 +261,28 @@ class EditorViewModel @Inject constructor(
     private fun restore(from: ArrayDeque<EditSnapshot>, onto: ArrayDeque<EditSnapshot>) {
         val current = _note.value ?: return
         val snapshot = from.removeLastOrNull() ?: return
-        onto.addLast(EditSnapshot(current.title, current.document))
+        onto.addLast(
+            EditSnapshot(
+                title = current.title,
+                document = current.document,
+                kind = EditKind.STRUCTURE,
+                atMs = System.currentTimeMillis(),
+                caret = liveCaret,
+            ),
+        )
         restoringHistory = true
         _note.value = current.copy(
             title = snapshot.title,
             document = snapshot.document,
             updatedAt = System.currentTimeMillis(),
         )
+        liveCaret = snapshot.caret
+        if (snapshot.caret != null) {
+            caretToken += 1
+            _caretJump.value = CaretJump(caretToken, snapshot.caret)
+        }
         restoringHistory = false
+        breakCoalesce = true
         refreshHistory()
         scheduleSave()
     }
@@ -315,6 +370,8 @@ class EditorViewModel @Inject constructor(
         boundId = -1
         undoStack.clear()
         redoStack.clear()
+        breakCoalesce = true
+        liveCaret = null
         refreshHistory()
     }
 
@@ -335,7 +392,7 @@ class EditorViewModel @Inject constructor(
         return noTables && noText
     }
 
-    private data class EditSnapshot(val title: String, val document: NoteDocument)
+    data class CaretJump(val token: Int, val caret: BlockCaret)
 
     enum class PinResult { OK, WRONG, RESET, MISSING }
 

@@ -86,6 +86,8 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.alekseevich47.notes.domain.EditHistory
+import com.alekseevich47.notes.domain.EditKind
 import com.alekseevich47.notes.domain.MarkEdits
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.NoteTable
@@ -106,7 +108,7 @@ internal fun RichNoteEditor(
     marks: List<TextMark>,
     readOnly: Boolean = false,
     hiddenUnlocked: Boolean,
-    onDocument: (String, List<TextMark>) -> Unit,
+    onDocument: (String, List<TextMark>, EditKind, Int, Int) -> Unit,
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
     onAskTable: () -> Unit,
@@ -240,9 +242,16 @@ internal fun RichNoteEditor(
     }
 
     fun publish(previous: String, edit: ListAutoFormat.Edit) {
+        val before = field.selection.end
         field = TextFieldValue(edit.text, TextRange(edit.cursor.coerceIn(0, edit.text.length)))
         if (field.selection.collapsed) hideMenu()
-        onDocument(edit.text, MarkEdits.shift(marks, previous, edit.text))
+        onDocument(
+            edit.text,
+            MarkEdits.shift(marks, previous, edit.text),
+            EditKind.STRUCTURE,
+            before,
+            field.selection.end,
+        )
     }
 
     fun collapseSelection() {
@@ -282,7 +291,8 @@ internal fun RichNoteEditor(
             onNeedSelection()
             return
         }
-        onDocument(text, MarkEdits.toggle(marks, style, start, end))
+        val caret = field.selection.end
+        onDocument(text, MarkEdits.toggle(marks, style, start, end), EditKind.STRUCTURE, caret, caret)
         hideMenu()
     }
 
@@ -466,7 +476,14 @@ internal fun RichNoteEditor(
                         // The menu waits for finger-up. Compose asks the toolbar to show only
                         // after the selection gesture ends; showing here covers the magnifier.
                         if (selection.collapsed) hideMenu()
-                        onDocument(edit.text, MarkEdits.shift(marks, previous, edit.text))
+                        val kind = EditHistory.kindForTextChange(previous, next.text, edit.text)
+                        onDocument(
+                            edit.text,
+                            MarkEdits.shift(marks, previous, edit.text),
+                            kind,
+                            previousSelection.end,
+                            selection.end,
+                        )
                         val ready = layout
                         if (ready != null) scheduleReveal(ready)
                     },
