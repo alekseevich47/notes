@@ -117,6 +117,20 @@ class ListAutoFormatTest {
     }
 
     @Test
+    fun typingInAPlainParagraphReturnsTextAndCursorUnchanged() {
+        val edit = ListAutoFormat.afterEdit("абзац", "аБбзац", cursor = 2)
+        assertEquals("аБбзац", edit.text)
+        assertEquals(2, edit.cursor)
+    }
+
+    @Test
+    fun numberedMarkerDoesNotTakeThePlainParagraphExit() {
+        val edit = ListAutoFormat.afterEdit("1.", "1.а", cursor = 3)
+        assertEquals("1. А", edit.text)
+        assertEquals("1. А".length, edit.cursor)
+    }
+
+    @Test
     fun toggleAddsAndRemovesMarker() {
         val on = ListAutoFormat.toggleLine("пункт", cursor = 5)
         assertEquals("1. Пункт", on.text)

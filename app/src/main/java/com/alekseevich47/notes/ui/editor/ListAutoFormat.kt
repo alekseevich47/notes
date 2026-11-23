@@ -14,6 +14,7 @@ object ListAutoFormat {
 
     private val numbered = Regex("""^(\d+)\.\s?(.*)$""")
     private val emptyNumbered = Regex("""^\d+\.\s*$""")
+    private val numberedLine = Regex("""(?m)^\d+\.""")
     private val ru = Locale.forLanguageTag("ru")
 
     fun afterEdit(
@@ -31,6 +32,11 @@ object ListAutoFormat {
         // Capitalize and renumber only after the IME commits the word. A live
         // composition range must keep matching the text the keyboard still owns.
         if (composing) return Edit(current, cursor.coerceIn(0, current.length))
+        // A paragraph with no "N." marker has nothing to renumber. Skip the
+        // split. Enter and a live composition are handled above this check.
+        if (!numberedLine.containsMatchIn(previous) && !numberedLine.containsMatchIn(current)) {
+            return Edit(current, cursor.coerceIn(0, current.length))
+        }
         val collapsed = collapseEmptyItem(previous, current)
         if (collapsed != null) return renumber(collapsed.text, collapsed.cursor, startAt)
         return renumber(current, cursor.coerceIn(0, current.length), startAt)
