@@ -8,4 +8,8 @@
     <cache-path
         name="shared_audio"
         path="share/" />
+    <!-- Bug-report JPEG copies and a snapshot of the diagnostic log. -->
+    <cache-path
+        name="bugreport"
+        path="bugreport/" />
 </paths>

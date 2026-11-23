@@ -79,6 +79,7 @@ fun SettingsScreen(
     var pinLockedUntil by remember { mutableLongStateOf(0L) }
     var changeStep by remember { mutableStateOf(ChangeStep.CURRENT) }
     var showTerms by rememberSaveable { mutableStateOf(false) }
+    var showReport by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier
@@ -245,6 +246,7 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(22.dp))
         SectionLabel("Диагностика")
+        ActionText("Сообщить об ошибке") { showReport = true }
         ActionText("Отправить лог") {
             runCatching { AppLog.share(context) }
                 .onFailure { onToast("Не удалось отправить лог") }
@@ -253,6 +255,13 @@ fun SettingsScreen(
         if (showTerms) {
             TermsDialog(onClose = { showTerms = false })
         }
+    }
+
+    if (showReport) {
+        BugReportDialog(
+            onDismiss = { showReport = false },
+            onToast = onToast,
+        )
     }
 
     val mode = pinMode

@@ -16,6 +16,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration
 import com.alekseevich47.notes.data.download.ModelDownloadManager
+import com.alekseevich47.notes.data.report.BugReportMailer
 import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.data.secure.NotesPrefs
@@ -73,6 +74,9 @@ class NotesApp : Application(), Configuration.Provider {
                     AppLog.e("NotesApp", "exit reasons failed", error)
                 }
             }
+        }
+        applicationScope.launch(Dispatchers.IO) {
+            BugReportMailer.purgeStale(this@NotesApp)
         }
         applicationScope.launch { notes.reindexSearchIfNeeded() }
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
