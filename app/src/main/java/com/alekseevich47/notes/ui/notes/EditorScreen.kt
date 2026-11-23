@@ -49,6 +49,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -218,10 +219,44 @@ fun EditorScreen(
                     .fillMaxWidth(),
             ) {
                 val minBody = maxHeight
-                val flow = NoteDocuments.flow(current.document)
-                val structure = flow.count { it.kind == BlockKind.TABLE } to flow.size
-                val lastText = flow.indexOfLast { it.kind == BlockKind.TEXT }
+                val flow = remember(current.document) { NoteDocuments.flow(current.document) }
+                val structure = remember(flow) { flow.count { it.kind == BlockKind.TABLE } to flow.size }
+                val lastText = remember(flow) { flow.indexOfLast { it.kind == BlockKind.TEXT } }
                 val requesters = remember(current.id, structure) { List(flow.size) { FocusRequester() } }
+                val noteNow = rememberUpdatedState(current)
+                val viewModelNow = rememberUpdatedState(viewModel)
+                val toastNow = rememberUpdatedState(onToast)
+                val onNeedSelection = remember { { toastNow.value("Выделите фрагмент") } }
+                val unlockNow = rememberUpdatedState<() -> Unit>(::openPinPrompt)
+                val onRequestUnlock = remember { { unlockNow.value() } }
+                val onAskTable = remember {
+                    {
+                        insertBlock = formats.tableBlock
+                        insertCursor = formats.tableCursor
+                        askTable = true
+                    }
+                }
+                val onBlockText = remember { { index: Int, text: String, marks: List<TextMark> ->
+                    viewModelNow.value.setBlockText(index, text, marks)
+                } }
+                val onDeleteTableAbove = remember { { index: Int ->
+                    val note = noteNow.value
+                    val blocks = NoteDocuments.flow(note.document)
+                    val above = blocks.getOrNull(index - 1)
+                    val table = above?.table
+                    if (above?.kind == BlockKind.TABLE && table != null) {
+                        val caret = NoteDocuments.caretAfterRemovingTable(note.document, index)
+                        viewModelNow.value.removeTable(table.id)
+                        if (caret != null) {
+                            caretRequest = CaretRequest(
+                                token = caretRequest.token + 1,
+                                blockIndex = caret.blockIndex,
+                                offset = caret.offset,
+                            )
+                        }
+                    }
+                } }
+                val updateTable = remember(viewModel) { viewModel::updateTable }
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -256,36 +291,12 @@ fun EditorScreen(
                                         pinDialogVisible = askPin,
                                         surface = surface,
                                         useSharedSurface = index == 0,
-                                        onText = { text, marks -> viewModel.setBlockText(index, text, marks) },
-                                        onNeedSelection = { onToast("Выделите фрагмент") },
-                                        onRequestUnlock = { openPinPrompt() },
-                                        onAskTable = {
-                                            insertBlock = formats.tableBlock
-                                            insertCursor = formats.tableCursor
-                                            askTable = true
-                                        },
-                                        onDeleteTableAbove = run {
-                                            val above = flow.getOrNull(index - 1)
-                                            val table = above?.table
-                                            if (above?.kind == BlockKind.TABLE && table != null) {
-                                                {
-                                                    val caret = NoteDocuments.caretAfterRemovingTable(
-                                                        current.document,
-                                                        index,
-                                                    )
-                                                    viewModel.removeTable(table.id)
-                                                    if (caret != null) {
-                                                        caretRequest = CaretRequest(
-                                                            token = caretRequest.token + 1,
-                                                            blockIndex = caret.blockIndex,
-                                                            offset = caret.offset,
-                                                        )
-                                                    }
-                                                }
-                                            } else {
-                                                null
-                                            }
-                                        },
+                                        onText = onBlockText,
+                                        onNeedSelection = onNeedSelection,
+                                        onRequestUnlock = onRequestUnlock,
+                                        onAskTable = onAskTable,
+                                        hasTableAbove = flow.getOrNull(index - 1)?.kind == BlockKind.TABLE,
+                                        onDeleteTableAbove = onDeleteTableAbove,
                                         caretToken = if (caretRequest.blockIndex == index) caretRequest.token else 0,
                                         caretOffset = if (caretRequest.blockIndex == index) caretRequest.offset else 0,
                                         listStart = listStartFor(flow, index),
@@ -293,20 +304,20 @@ fun EditorScreen(
                                     BlockKind.TABLE -> {
                                         val table = block.table
                                         if (table != null) {
+                                            val tableId = table.id
+                                            val onDelete = remember(tableId) {
+                                                { viewModelNow.value.removeTable(tableId) }
+                                            }
                                             TableBlock(
                                                 table = table,
                                                 blockIndex = index,
                                                 readOnly = unreadable,
                                                 hiddenUnlocked = unlocked,
                                                 formats = formats,
-                                                onChange = viewModel::updateTable,
-                                                onDelete = { viewModel.removeTable(table.id) },
-                                                onAskTable = {
-                                                    insertBlock = formats.tableBlock
-                                                    insertCursor = formats.tableCursor
-                                                    askTable = true
-                                                },
-                                                onRequestUnlock = { openPinPrompt() },
+                                                onChange = updateTable,
+                                                onDelete = onDelete,
+                                                onAskTable = onAskTable,
+                                                onRequestUnlock = onRequestUnlock,
                                             )
                                         }
                                     }
@@ -481,24 +492,29 @@ private fun NoteTextBlock(
     pinDialogVisible: Boolean,
     surface: NoteSurfaceBridge,
     useSharedSurface: Boolean,
-    onText: (String, List<TextMark>) -> Unit,
+    onText: (Int, String, List<TextMark>) -> Unit,
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
     onAskTable: () -> Unit,
-    onDeleteTableAbove: (() -> Unit)? = null,
+    hasTableAbove: Boolean,
+    onDeleteTableAbove: (Int) -> Unit,
     caretToken: Int = 0,
     caretOffset: Int = 0,
     listStart: Int = 1,
 ) {
     val bridge = remember(noteId, blockIndex) { NoteSurfaceBridge() }
+    val publishText = rememberUpdatedState(onText)
+    val onDocument = remember(blockIndex) {
+        { nextText: String, nextMarks: List<TextMark> ->
+            publishText.value(blockIndex, nextText, nextMarks)
+        }
+    }
     RichNoteEditor(
-        document = com.alekseevich47.notes.domain.NoteDocument(
-            text = text,
-            marks = marks,
-        ),
+        text = text,
+        marks = marks,
         readOnly = readOnly,
         hiddenUnlocked = hiddenUnlocked,
-        onDocument = { slice -> onText(slice.text, slice.marks) },
+        onDocument = onDocument,
         onNeedSelection = onNeedSelection,
         onRequestUnlock = onRequestUnlock,
         onAskTable = onAskTable,
@@ -509,6 +525,7 @@ private fun NoteTextBlock(
         modifier = Modifier.padding(horizontal = 20.dp),
         blockIndex = blockIndex,
         placeholder = placeholder,
+        hasTableAbove = hasTableAbove,
         onDeleteTableAbove = onDeleteTableAbove,
         caretToken = caretToken,
         caretOffset = caretOffset,

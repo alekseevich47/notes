@@ -88,7 +88,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.alekseevich47.notes.domain.MarkEdits
 import com.alekseevich47.notes.domain.MarkStyle
-import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteTable
 import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
@@ -103,10 +102,11 @@ private val numberedLine = Regex("""^\d+\.\s?.*""")
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun RichNoteEditor(
-    document: NoteDocument,
+    text: String,
+    marks: List<TextMark>,
     readOnly: Boolean = false,
     hiddenUnlocked: Boolean,
-    onDocument: (NoteDocument) -> Unit,
+    onDocument: (String, List<TextMark>) -> Unit,
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
     onAskTable: () -> Unit,
@@ -118,26 +118,30 @@ internal fun RichNoteEditor(
     blockIndex: Int = 0,
     placeholder: String = "Начните писать…",
     onFocused: (Boolean) -> Unit = {},
-    onDeleteTableAbove: (() -> Unit)? = null,
+    hasTableAbove: Boolean = false,
+    onDeleteTableAbove: (Int) -> Unit = {},
     caretToken: Int = 0,
     caretOffset: Int = 0,
     listStart: Int = 1,
 ) {
     var field by remember {
-        mutableStateOf(TextFieldValue(document.text, TextRange(document.text.length)))
+        mutableStateOf(TextFieldValue(text, TextRange(text.length)))
     }
     val fieldNow = remember { FieldSlot(field) }
     fieldNow.current = field
     val deleteTableAbove = rememberUpdatedState(onDeleteTableAbove)
+    val tableAbove = rememberUpdatedState(hasTableAbove)
+    val blockIndexNow = rememberUpdatedState(blockIndex)
     val lastTableBackspace = remember { longArrayOf(0L) }
     fun backspaceAtStart(): Boolean {
-        val delete = deleteTableAbove.value ?: return false
+        if (!tableAbove.value) return false
+        val delete = deleteTableAbove.value
         val current = fieldNow.current
         if (!(current.selection.collapsed && current.selection.min == 0)) return false
         val now = android.os.SystemClock.uptimeMillis()
         if (now - lastTableBackspace[0] < 150L) return true
         lastTableBackspace[0] = now
-        delete()
+        delete(blockIndexNow.value)
         return true
     }
     val tableBackspace = remember {
@@ -155,20 +159,20 @@ internal fun RichNoteEditor(
     }
     val keyboard = LocalSoftwareKeyboardController.current
     var consumedCaret by remember { mutableIntStateOf(0) }
-    LaunchedEffect(document.text, caretToken) {
+    LaunchedEffect(text, caretToken) {
         if (caretToken > 0 && caretToken != consumedCaret) {
             consumedCaret = caretToken
-            val cursor = caretOffset.coerceIn(0, document.text.length)
-            field = TextFieldValue(document.text, TextRange(cursor))
+            val cursor = caretOffset.coerceIn(0, text.length)
+            field = TextFieldValue(text, TextRange(cursor))
             fieldNow.current = field
             withFrameNanos { }
             runCatching { focusRequester.requestFocus() }
             keyboard?.show()
             return@LaunchedEffect
         }
-        if (field.text != document.text) {
-            val cursor = field.selection.end.coerceIn(0, document.text.length)
-            field = TextFieldValue(document.text, TextRange(cursor))
+        if (field.text != text) {
+            val cursor = field.selection.end.coerceIn(0, text.length)
+            field = TextFieldValue(text, TextRange(cursor))
             fieldNow.current = field
         }
     }
@@ -187,10 +191,10 @@ internal fun RichNoteEditor(
     val toolbar = remember { RoutingTextToolbar(platformToolbar) }
     val ink = MaterialTheme.colorScheme.onSurface
     val censorLayout = layout
-    val censor = !hiddenUnlocked && document.marks.any { it.style == MarkStyle.HIDDEN }
+    val censor = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }
     val spoiler = rememberSpoilerPaint(
         text = field.text,
-        marks = document.marks,
+        marks = marks,
         style = MaterialTheme.typography.bodyLarge.copy(
             color = ink,
             fontFamily = NotesFont,
@@ -238,12 +242,7 @@ internal fun RichNoteEditor(
     fun publish(previous: String, edit: ListAutoFormat.Edit) {
         field = TextFieldValue(edit.text, TextRange(edit.cursor.coerceIn(0, edit.text.length)))
         if (field.selection.collapsed) hideMenu()
-        onDocument(
-            document.copy(
-                text = edit.text,
-                marks = MarkEdits.shift(document.marks, previous, edit.text),
-            ),
-        )
+        onDocument(edit.text, MarkEdits.shift(marks, previous, edit.text))
     }
 
     fun collapseSelection() {
@@ -267,7 +266,7 @@ internal fun RichNoteEditor(
         hideMenu()
         if (
             !hiddenUnlocked &&
-            HiddenText.cursorInside(document.marks, cursor, cursor) &&
+            HiddenText.cursorInside(marks, cursor, cursor) &&
             prompt.armed &&
             !prompt.dialogOpen
         ) {
@@ -283,7 +282,7 @@ internal fun RichNoteEditor(
             onNeedSelection()
             return
         }
-        onDocument(document.copy(marks = MarkEdits.toggle(document.marks, style, start, end)))
+        onDocument(text, MarkEdits.toggle(marks, style, start, end))
         hideMenu()
     }
 
@@ -295,7 +294,7 @@ internal fun RichNoteEditor(
 
     fun overlapsLockedHidden(): Boolean {
         if (hiddenUnlocked) return false
-        return HiddenText.cursorInside(document.marks, field.selection.start, field.selection.end)
+        return HiddenText.cursorInside(marks, field.selection.start, field.selection.end)
     }
 
     fun copySelection() {
@@ -373,7 +372,7 @@ internal fun RichNoteEditor(
                 formats.tableCursor = field.selection.end
                 onAskTable()
             }
-            formats.activeStyles = stylesTouching(document.marks, field.selection)
+            formats.activeStyles = stylesTouching(marks, field.selection)
             formats.listActive = lineNumbered(field.text, field.selection.min)
         }
         surface.onGestureSettle = settle@{ cleared, collapsedAtDown, root ->
@@ -441,9 +440,9 @@ internal fun RichNoteEditor(
                             return@BasicTextField
                         }
                         if (blockMenu) blockMenu = false
-                        val textHitsHidden = HiddenText.editTouches(document.marks, previous, next.text)
+                        val textHitsHidden = HiddenText.editTouches(marks, previous, next.text)
                         val cursorInHidden = HiddenText.cursorInside(
-                            document.marks,
+                            marks,
                             next.selection.start,
                             next.selection.end,
                         )
@@ -467,12 +466,7 @@ internal fun RichNoteEditor(
                         // The menu waits for finger-up. Compose asks the toolbar to show only
                         // after the selection gesture ends; showing here covers the magnifier.
                         if (selection.collapsed) hideMenu()
-                        onDocument(
-                            document.copy(
-                                text = edit.text,
-                                marks = MarkEdits.shift(document.marks, previous, edit.text),
-                            ),
-                        )
+                        onDocument(edit.text, MarkEdits.shift(marks, previous, edit.text))
                         val ready = layout
                         if (ready != null) scheduleReveal(ready)
                     },
@@ -508,7 +502,7 @@ internal fun RichNoteEditor(
                             onFocused(it.isFocused)
                         }
                         .drawWithContent {
-                            if (censor) drawSpoilerShadows(spoiler, document.marks, ink)
+                            if (censor) drawSpoilerShadows(spoiler, marks, ink)
                             drawContent()
                         },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
@@ -520,8 +514,8 @@ internal fun RichNoteEditor(
                         capitalization = KeyboardCapitalization.Sentences,
                         autoCorrectEnabled = true,
                     ),
-                    visualTransformation = remember(document.marks, hiddenUnlocked) {
-                        NoteVisual(document.marks, hiddenUnlocked)
+                    visualTransformation = remember(marks, hiddenUnlocked) {
+                        NoteVisual(marks, hiddenUnlocked)
                     },
                     decorationBox = { inner ->
                         Box(Modifier.fillMaxWidth()) {
