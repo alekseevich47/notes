@@ -271,6 +271,7 @@ internal fun TableBlock(
             span
         }
     }
+    var tableCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val editing = active != null
     val background = MaterialTheme.colorScheme.background
     val dark = (0.2126f * background.red + 0.7152f * background.green + 0.0722f * background.blue) < 0.4f
@@ -278,8 +279,40 @@ internal fun TableBlock(
     val gridLine = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
     val ink = MaterialTheme.colorScheme.onSurface
     BackHandler(enabled = menu != null) { menu = null }
+    DisposableEffect(surface, blockIndex) {
+        onDispose { surface?.unregister(blockIndex) }
+    }
+    SideEffect {
+        val bridge = surface ?: return@SideEffect
+        bridge.register(
+            blockIndex,
+            BlockSurfaceHandlers(
+                focused = false,
+                readSelection = { SelectionSnapshot.Collapsed },
+                bounds = { root ->
+                    val coords = tableCoordinates
+                    if (coords == null || !coords.isAttached) {
+                        false
+                    } else {
+                        val local = root - coords.localToRoot(Offset.Zero)
+                        pointInsideTextBounds(
+                            local.x,
+                            local.y,
+                            coords.size.width.toFloat(),
+                            coords.size.height.toFloat(),
+                        )
+                    }
+                },
+            ),
+        )
+    }
 
-    Column(modifier.fillMaxWidth().padding(top = 8.dp)) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .onGloballyPositioned { tableCoordinates = it },
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1108,6 +1141,7 @@ private fun TableCellEditor(
                 onDismiss = clearPaste,
             )
         }
+        ReportLinkDialog(formats, linkDraft != null)
         val draft = linkDraft
         if (draft != null) {
             LinkDialog(

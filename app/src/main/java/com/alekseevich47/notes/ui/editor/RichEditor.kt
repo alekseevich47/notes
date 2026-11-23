@@ -96,6 +96,7 @@ import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.NoteTable
 import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.components.LinkDialog
 import com.alekseevich47.notes.ui.theme.NotesPurple
@@ -445,6 +446,21 @@ internal fun RichNoteEditor(
                         pointInsideSelection(local.x, local.y, bandsFor(result, start, end))
                     }
                 },
+                bounds = { root ->
+                    val coords = textCoordinates
+                    val result = layout
+                    if (coords == null || !coords.isAttached || result == null) {
+                        false
+                    } else {
+                        val local = root - coords.localToRoot(Offset.Zero)
+                        pointInsideTextBounds(
+                            local.x,
+                            local.y,
+                            result.size.width.toFloat(),
+                            result.size.height.toFloat(),
+                        )
+                    }
+                },
                 onClear = { root, _ ->
                     val coords = textCoordinates
                     val result = layout
@@ -673,6 +689,10 @@ internal fun RichNoteEditor(
                         .focusRequester(focusRequester)
                         .onFocusChanged {
                             blockFocused = it.isFocused
+                            AppLog.i(
+                                "EditorFocus",
+                                if (it.isFocused) "text block focused" else "text block cleared",
+                            )
                             if (!it.isFocused) pasteAnchor = null
                             if (it.isFocused) {
                                 formats.bodyFocused = true
@@ -784,6 +804,7 @@ internal fun RichNoteEditor(
             }
         }
     }
+    ReportLinkDialog(formats, linkDraft != null)
     val draft = linkDraft
     if (draft != null) {
         LinkDialog(
