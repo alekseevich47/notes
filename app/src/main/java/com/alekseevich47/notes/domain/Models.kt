@@ -1182,6 +1182,40 @@ object MarkEdits {
         return merge(next)
     }
 
+    /**
+     * Styles a just-typed insert. [pendingOn] covers only [insStart, insEnd).
+     * [pendingOff] splits an existing mark of that style around the insert.
+     * [MarkStyle.HIDDEN] is ignored: hidden text is created from a selection.
+     */
+    fun applyTyping(
+        marks: List<TextMark>,
+        insStart: Int,
+        insEnd: Int,
+        pendingOn: Set<MarkStyle>,
+        pendingOff: Set<MarkStyle>,
+    ): List<TextMark> {
+        if (insEnd <= insStart) return marks
+        val off = pendingOff - MarkStyle.HIDDEN
+        val on = (pendingOn - MarkStyle.HIDDEN) - off
+        if (off.isEmpty() && on.isEmpty()) return marks
+        val cut = if (off.isEmpty()) {
+            marks
+        } else {
+            marks.flatMap { mark ->
+                if (mark.style !in off || mark.end <= insStart || mark.start >= insEnd) {
+                    listOf(mark)
+                } else {
+                    buildList {
+                        if (mark.start < insStart) add(mark.copy(end = insStart))
+                        if (mark.end > insEnd) add(mark.copy(start = insEnd))
+                    }
+                }
+            }
+        }
+        val added = on.map { style -> TextMark(insStart, insEnd, style) }
+        return merge(cut + added)
+    }
+
     private fun merge(marks: List<TextMark>): List<TextMark> {
         return marks
             .filter { it.end > it.start }

@@ -48,6 +48,8 @@ class NoteEditorController {
     var bodyFocused by mutableStateOf(false)
     var editingCell by mutableStateOf(false)
     var activeStyles by mutableStateOf(emptySet<MarkStyle>())
+    var pendingOn by mutableStateOf(emptySet<MarkStyle>())
+    var pendingOff by mutableStateOf(emptySet<MarkStyle>())
     var listActive by mutableStateOf(false)
     var tableBlock: Int = 0
     var tableCursor: Int = 0
@@ -67,16 +69,17 @@ fun EditorFormatBar(
 ) {
     val divider = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
     val plate = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+    val shown = (controller.activeStyles + controller.pendingOn) - controller.pendingOff
     ColumnBar(plate, divider, modifier) {
         // Read lambdas at click time: SideEffect in the editor refreshes them
         // without notifying this bar when activeStyles/listActive stay unchanged
         // (empty note, caret only). Capturing controller.bold here freezes {}.
-        FormatIcon(Icons.Outlined.FormatBold, "Жирный", MarkStyle.BOLD in controller.activeStyles) { controller.bold() }
+        FormatIcon(Icons.Outlined.FormatBold, "Жирный", MarkStyle.BOLD in shown) { controller.bold() }
         BarDivider(divider)
-        FormatIcon(Icons.Outlined.FormatItalic, "Курсив", MarkStyle.ITALIC in controller.activeStyles) { controller.italic() }
-        FormatIcon(FormatStrikeS, "Зачёркнутый", MarkStyle.STRIKE in controller.activeStyles) { controller.strike() }
-        FormatIcon(Icons.Outlined.FormatUnderlined, "Подчёркнутый", MarkStyle.UNDERLINE in controller.activeStyles) { controller.underline() }
-        FormatIcon(Icons.Outlined.VisibilityOff, "Скрытый", MarkStyle.HIDDEN in controller.activeStyles) { controller.hidden() }
+        FormatIcon(Icons.Outlined.FormatItalic, "Курсив", MarkStyle.ITALIC in shown) { controller.italic() }
+        FormatIcon(FormatStrikeS, "Зачёркнутый", MarkStyle.STRIKE in shown) { controller.strike() }
+        FormatIcon(Icons.Outlined.FormatUnderlined, "Подчёркнутый", MarkStyle.UNDERLINE in shown) { controller.underline() }
+        FormatIcon(Icons.Outlined.VisibilityOff, "Скрытый", MarkStyle.HIDDEN in shown) { controller.hidden() }
         BarDivider(divider)
         FormatIcon(FormatTableGrid, "Таблица", active = false) { controller.table() }
         BarDivider(divider)

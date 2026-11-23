@@ -61,6 +61,60 @@ class MarkEditsTest {
     }
 
     @Test
+    fun applyTypingPendingBoldCoversOnlyTheInsert() {
+        val marks = listOf(TextMark(0, 2, MarkStyle.ITALIC))
+        val next = MarkEdits.applyTyping(
+            marks,
+            insStart = 4,
+            insEnd = 7,
+            pendingOn = setOf(MarkStyle.BOLD),
+            pendingOff = emptySet(),
+        )
+        assertEquals(listOf(TextMark(4, 7, MarkStyle.BOLD)), next.filter { it.style == MarkStyle.BOLD })
+        assertEquals(listOf(TextMark(0, 2, MarkStyle.ITALIC)), next.filter { it.style == MarkStyle.ITALIC })
+    }
+
+    @Test
+    fun applyTypingPendingOffSplitsBoldAroundTheInsert() {
+        val next = MarkEdits.applyTyping(
+            listOf(TextMark(0, 6, MarkStyle.BOLD)),
+            insStart = 2,
+            insEnd = 3,
+            pendingOn = emptySet(),
+            pendingOff = setOf(MarkStyle.BOLD),
+        )
+        assertEquals(
+            listOf(TextMark(0, 2, MarkStyle.BOLD), TextMark(3, 6, MarkStyle.BOLD)),
+            next,
+        )
+    }
+
+    @Test
+    fun applyTypingIgnoresHiddenInPendingOn() {
+        val next = MarkEdits.applyTyping(
+            emptyList(),
+            insStart = 1,
+            insEnd = 4,
+            pendingOn = setOf(MarkStyle.HIDDEN, MarkStyle.BOLD),
+            pendingOff = emptySet(),
+        )
+        assertEquals(listOf(TextMark(1, 4, MarkStyle.BOLD)), next)
+    }
+
+    @Test
+    fun applyTypingEmptyInsertAddsNothing() {
+        val marks = listOf(TextMark(0, 3, MarkStyle.BOLD))
+        val next = MarkEdits.applyTyping(
+            marks,
+            insStart = 1,
+            insEnd = 1,
+            pendingOn = setOf(MarkStyle.BOLD, MarkStyle.ITALIC),
+            pendingOff = setOf(MarkStyle.UNDERLINE),
+        )
+        assertEquals(marks, next)
+    }
+
+    @Test
     fun deleteAcrossTheBoundaryTrimsTheSpan() {
         // "d w" crosses the end of "bold" into the following word.
         val after = "hello bolorld"

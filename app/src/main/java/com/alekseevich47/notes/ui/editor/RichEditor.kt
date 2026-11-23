@@ -257,12 +257,19 @@ internal fun RichNoteEditor(
         )
     }
 
+    fun clearPendingStyles() {
+        if (formats.pendingOn.isEmpty() && formats.pendingOff.isEmpty()) return
+        formats.pendingOn = emptySet()
+        formats.pendingOff = emptySet()
+    }
+
     fun collapseSelection() {
         blockMenu = true
         toolbar.suppressPlatform = true
         releasePlatformMenu = false
         if (!field.selection.collapsed) {
             field = field.copy(selection = TextRange(field.selection.end))
+            clearPendingStyles()
         }
         toolbar.hide()
         hideMenu()
@@ -273,6 +280,7 @@ internal fun RichNoteEditor(
         blockMenu = true
         toolbar.suppressPlatform = true
         releasePlatformMenu = false
+        if (field.selection != TextRange(cursor)) clearPendingStyles()
         field = field.copy(selection = TextRange(cursor))
         toolbar.hide()
         hideMenu()
@@ -286,12 +294,23 @@ internal fun RichNoteEditor(
         }
     }
 
+    fun togglePending(style: MarkStyle) {
+        val on = formats.pendingOn
+        val off = formats.pendingOff
+        when {
+            style in on -> formats.pendingOn = on - style
+            style in off -> formats.pendingOff = off - style
+            style in stylesTouching(marks, field.selection) -> formats.pendingOff = off + style
+            else -> formats.pendingOn = on + style
+        }
+    }
+
     fun applyMark(style: MarkStyle) {
         if (readOnly) return
         val start = field.selection.min
         val end = field.selection.max
         if (start == end) {
-            onNeedSelection()
+            if (style != MarkStyle.HIDDEN) togglePending(style)
             return
         }
         val caret = field.selection.end
@@ -534,9 +553,29 @@ internal fun RichNoteEditor(
                         // after the selection gesture ends; showing here covers the magnifier.
                         if (selection.collapsed) hideMenu()
                         val kind = EditHistory.kindForTextChange(previous, next.text, edit.text)
+                        val shifted = MarkEdits.shift(marks, previous, edit.text)
+                        val inserted = if (previousSelection.collapsed) {
+                            pureInsertion(previous, edit.text)
+                        } else {
+                            null
+                        }
+                        val nextMarks = if (inserted != null) {
+                            MarkEdits.applyTyping(
+                                shifted,
+                                inserted.first,
+                                inserted.second,
+                                formats.pendingOn,
+                                formats.pendingOff,
+                            )
+                        } else {
+                            shifted
+                        }
+                        if (edit.text == previous && selection != previousSelection) {
+                            clearPendingStyles()
+                        }
                         onDocument(
                             edit.text,
-                            MarkEdits.shift(marks, previous, edit.text),
+                            nextMarks,
                             kind,
                             previousSelection.end,
                             selection.end,
@@ -572,6 +611,7 @@ internal fun RichNoteEditor(
                                 formats.editingCell = false
                             } else {
                                 formats.bodyFocused = false
+                                clearPendingStyles()
                             }
                             onFocused(it.isFocused)
                         }
@@ -747,6 +787,34 @@ private fun bandsFor(layout: TextLayoutResult, start: Int, end: Int): List<Selec
         lineRight = { layout.getLineRight(it) },
         xForOffset = { offset -> layout.getHorizontalPosition(offset.coerceIn(0, length), true) },
     )
+}
+
+/**
+ * A pure insertion in the new text, or null when the edit also deleted
+ * or replaced characters. The range is [start, end) in [after].
+ */
+private fun pureInsertion(before: String, after: String): Pair<Int, Int>? {
+    if (after.length <= before.length) return null
+    val prefix = sharedPrefixLength(before, after)
+    var suffix = 0
+    val limit = minOf(before.length - prefix, after.length - prefix)
+    while (
+        suffix < limit &&
+        before[before.length - 1 - suffix] == after[after.length - 1 - suffix]
+    ) {
+        suffix++
+    }
+    val oldEnd = before.length - suffix
+    val newEnd = after.length - suffix
+    if (oldEnd != prefix || newEnd <= prefix) return null
+    return prefix to newEnd
+}
+
+private fun sharedPrefixLength(left: String, right: String): Int {
+    val limit = minOf(left.length, right.length)
+    var index = 0
+    while (index < limit && left[index] == right[index]) index++
+    return index
 }
 
 private fun stylesTouching(marks: List<TextMark>, selection: TextRange): Set<MarkStyle> {
