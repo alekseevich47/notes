@@ -26,8 +26,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,12 +58,12 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val theme by viewModel.theme.collectAsState()
-    val pin by viewModel.pinHash.collectAsState()
-    val models by viewModel.models.collectAsState()
-    val modelEnabled by viewModel.modelEnabled.collectAsState()
-    val warmup by viewModel.warmupOnBoot.collectAsState()
-    val recognizer by viewModel.recognizer.collectAsState()
+    val theme by viewModel.theme.collectAsStateWithLifecycle()
+    val pin by viewModel.pinHash.collectAsStateWithLifecycle()
+    val models by viewModel.models.collectAsStateWithLifecycle()
+    val modelEnabled by viewModel.modelEnabled.collectAsStateWithLifecycle()
+    val warmup by viewModel.warmupOnBoot.collectAsStateWithLifecycle()
+    val recognizer by viewModel.recognizer.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }

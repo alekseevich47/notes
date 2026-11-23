@@ -44,8 +44,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -109,12 +109,12 @@ fun EditorScreen(
     modifier: Modifier = Modifier,
     viewModel: EditorViewModel = hiltViewModel(),
 ) {
-    val note by viewModel.note.collectAsState()
-    val unreadable by viewModel.unreadable.collectAsState()
-    val unlocked by viewModel.unlocked.collectAsState()
-    val player by viewModel.playerUi.collectAsState()
-    val canUndo by viewModel.canUndo.collectAsState()
-    val canRedo by viewModel.canRedo.collectAsState()
+    val note by viewModel.note.collectAsStateWithLifecycle()
+    val unreadable by viewModel.unreadable.collectAsStateWithLifecycle()
+    val unlocked by viewModel.unlocked.collectAsStateWithLifecycle()
+    val player by viewModel.playerUi.collectAsStateWithLifecycle()
+    val canUndo by viewModel.canUndo.collectAsStateWithLifecycle()
+    val canRedo by viewModel.canRedo.collectAsStateWithLifecycle()
     var confirmDelete by remember { mutableStateOf(false) }
     var askPin by remember { mutableStateOf(false) }
     var pinError by remember { mutableStateOf<String?>(null) }

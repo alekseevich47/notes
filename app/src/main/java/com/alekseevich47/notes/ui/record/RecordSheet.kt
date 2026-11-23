@@ -21,15 +21,33 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 fun RecordSheet(
     visible: Boolean,
     phase: MicPhase,
-    text: String,
+    text: StateFlow<String>,
+    modifier: Modifier = Modifier,
+) {
+    val textState = text.collectAsStateWithLifecycle()
+    RecordSheet(
+        visible = visible,
+        phase = phase,
+        text = { textState.value },
+        modifier = modifier,
+    )
+}
+
+@Composable
+fun RecordSheet(
+    visible: Boolean,
+    phase: MicPhase,
+    text: () -> String,
     modifier: Modifier = Modifier,
 ) {
     AnimatedVisibility(
@@ -68,13 +86,23 @@ fun RecordSheet(
             )
             Spacer(Modifier.height(16.dp))
             Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-                Text(
-                    text = text.ifBlank { "Слушаю…" },
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontFamily = NotesFont,
-                    color = if (text.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                )
+                LiveTranscript(text)
             }
         }
     }
+}
+
+@Composable
+private fun LiveTranscript(text: () -> String) {
+    val transcript = text()
+    Text(
+        text = transcript.ifBlank { "Слушаю…" },
+        style = MaterialTheme.typography.headlineMedium,
+        fontFamily = NotesFont,
+        color = if (transcript.isBlank()) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+    )
 }

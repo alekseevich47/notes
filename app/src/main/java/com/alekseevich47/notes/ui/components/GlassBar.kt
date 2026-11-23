@@ -23,9 +23,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import dev.chrisbanes.haze.HazeState
+import kotlinx.coroutines.flow.StateFlow
 
 enum class ShellTab { NOTES, SETTINGS }
 
@@ -34,7 +36,29 @@ fun GlassBottomBar(
     hazeState: HazeState,
     tab: ShellTab,
     phase: MicPhase,
-    level: Float,
+    level: StateFlow<Float>,
+    onTab: (ShellTab) -> Unit,
+    onMic: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val levelState = level.collectAsStateWithLifecycle()
+    GlassBottomBar(
+        hazeState = hazeState,
+        tab = tab,
+        phase = phase,
+        level = { levelState.value },
+        onTab = onTab,
+        onMic = onMic,
+        modifier = modifier,
+    )
+}
+
+@Composable
+fun GlassBottomBar(
+    hazeState: HazeState,
+    tab: ShellTab,
+    phase: MicPhase,
+    level: () -> Float,
     onTab: (ShellTab) -> Unit,
     onMic: () -> Unit,
     modifier: Modifier = Modifier,

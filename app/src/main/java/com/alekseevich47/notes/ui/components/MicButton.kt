@@ -79,7 +79,7 @@ private val RecordingColors = blendStops(
 @Composable
 fun MicButton(
     phase: MicPhase,
-    level: Float,
+    level: () -> Float,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -104,7 +104,7 @@ fun MicButton(
         label = "dots",
     )
     val easedLevel by animateFloatAsState(
-        targetValue = level.coerceIn(0f, 1f),
+        targetValue = level().coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
         label = "level",
     )
@@ -127,8 +127,10 @@ fun MicButton(
     ) {
         if (phase == MicPhase.RECORDING) {
             Canvas(Modifier.matchParentSize()) {
+                // Snapshot read: StateFlow.value alone would not invalidate this draw.
+                val meter = level().coerceIn(0f, 1f)
                 drawCircle(
-                    color = NotesPurple.copy(alpha = 0.16f + easedLevel * 0.26f),
+                    color = NotesPurple.copy(alpha = 0.16f + smoothedMeter(easedLevel, meter) * 0.26f),
                     radius = size.minDimension / 2f,
                 )
             }
@@ -148,8 +150,9 @@ fun MicButton(
                         drawOutlineMic(glyph, idleInk)
                     }
                     MicPhase.RECORDING -> {
+                        val shown = smoothedMeter(easedLevel, level().coerceIn(0f, 1f))
                         clipPath(glyph.inner) {
-                            drawRecordingFill(glyph.body, easedLevel, colorShift, wave)
+                            drawRecordingFill(glyph.body, shown, colorShift, wave)
                         }
                         drawOutlineMic(glyph, ink)
                     }
@@ -348,6 +351,12 @@ private fun DrawScope.drawRecordingFill(body: Rect, level: Float, shift: Float, 
         ),
     )
 }
+
+/**
+ * Pixels stay on [smoothed]. [sampled] stays in the expression so the draw
+ * scope observes the meter snapshot and is not dropped as an unused read.
+ */
+private fun smoothedMeter(smoothed: Float, sampled: Float): Float = smoothed + (sampled - sampled)
 
 /** Loud speech fills most of the head; silence stays a low band. */
 private fun loudFill(level: Float): Float {

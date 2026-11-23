@@ -16,17 +16,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.R
@@ -64,16 +65,12 @@ fun NotesRoot(
     notesVm: NotesViewModel = hiltViewModel(),
     editorVm: EditorViewModel = hiltViewModel(),
 ) {
-    val ui by shell.ui.collectAsState()
-    val phase by shell.session.phase.collectAsState()
-    val level by shell.session.level.collectAsState()
-    val live by shell.session.liveText.collectAsState()
-    val lastNote by shell.session.lastNoteId.collectAsState()
-    val toast by shell.toast.collectAsState()
-    val notes by notesVm.notes.collectAsState()
-    val query by notesVm.search.collectAsState()
-    val range by notesVm.dateRange.collectAsState()
-    val playback by editorVm.playerUi.collectAsState()
+    val ui by shell.ui.collectAsStateWithLifecycle()
+    val phase by shell.session.phase.collectAsStateWithLifecycle()
+    val lastNote by shell.session.lastNoteId.collectAsStateWithLifecycle()
+    val toast by shell.toast.collectAsStateWithLifecycle()
+    // Playback drives the sticky player, which sits outside the list.
+    val playback by editorVm.playerUi.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val density = LocalDensity.current
     var stickyPx by remember { mutableIntStateOf(0) }
@@ -81,7 +78,6 @@ fun NotesRoot(
     val insetTarget = if (showSticky) with(density) { stickyPx.toDp() } + 8.dp else 0.dp
     val listInset by animateDpAsState(insetTarget, tween(240), label = "sticky-inset")
     val hazeState = remember { HazeState() }
-    var showCalendar by remember { mutableStateOf(false) }
     var openedDone by remember { mutableStateOf<Long?>(null) }
     var explainPermissions by remember { mutableStateOf(false) }
     val micDenied = stringResource(R.string.permission_mic_denied)
@@ -144,24 +140,12 @@ fun NotesRoot(
                     .hazeSource(state = hazeState),
             ) {
                 when (ui.screen) {
-                    Screen.LIST -> NotesListScreen(
-                        notes = notes,
-                        query = query,
-                        range = range,
+                    Screen.LIST -> NotesListPage(
+                        notesVm = notesVm,
                         hazeState = hazeState,
-                        onQuery = notesVm::setQuery,
-                        onCalendar = { showCalendar = true },
-                        onClearRange = { notesVm.setRange(null) },
+                        playingNoteId = playback.noteId,
                         onOpen = shell::openEditor,
                         onCreate = shell::createManual,
-                        onDeleteSelected = { ids ->
-                            if (playback.noteId != null && playback.noteId in ids) {
-                                context.startService(
-                                    Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_STOP),
-                                )
-                            }
-                            notesVm.deleteMany(ids)
-                        },
                         bottomInset = listInset,
                         modifier = Modifier.statusBarsPadding(),
                     )
@@ -187,7 +171,7 @@ fun NotesRoot(
                 RecordSheet(
                     visible = true,
                     phase = phase,
-                    text = live,
+                    text = shell.session.liveText,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -217,7 +201,7 @@ fun NotesRoot(
                     hazeState = hazeState,
                     tab = if (ui.screen == Screen.SETTINGS) ShellTab.SETTINGS else ShellTab.NOTES,
                     phase = phase,
-                    level = level,
+                    level = shell.session.level,
                     onTab = { tab ->
                         when (tab) {
                             ShellTab.NOTES -> shell.showList()
@@ -250,20 +234,61 @@ fun NotesRoot(
                     onDismiss = { explainPermissions = false },
                 )
             }
-            if (showCalendar) {
-                DateRangeModal(
-                    initial = range,
-                    onConfirm = {
-                        notesVm.setRange(it)
-                        showCalendar = false
-                    },
-                    onClear = {
-                        notesVm.setRange(null)
-                        showCalendar = false
-                    },
-                    onDismiss = { showCalendar = false },
+        }
+    }
+}
+
+/**
+ * List-only subscription. Search results must not recompose the editor or the mic.
+ */
+@Composable
+private fun NotesListPage(
+    notesVm: NotesViewModel,
+    hazeState: HazeState,
+    playingNoteId: Long?,
+    onOpen: (Long) -> Unit,
+    onCreate: () -> Unit,
+    bottomInset: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val notes by notesVm.notes.collectAsStateWithLifecycle()
+    val query by notesVm.search.collectAsStateWithLifecycle()
+    val range by notesVm.dateRange.collectAsStateWithLifecycle()
+    var showCalendar by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    NotesListScreen(
+        notes = notes,
+        query = query,
+        range = range,
+        hazeState = hazeState,
+        onQuery = notesVm::setQuery,
+        onCalendar = { showCalendar = true },
+        onClearRange = { notesVm.setRange(null) },
+        onOpen = onOpen,
+        onCreate = onCreate,
+        onDeleteSelected = { ids ->
+            if (playingNoteId != null && playingNoteId in ids) {
+                context.startService(
+                    Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_STOP),
                 )
             }
-        }
+            notesVm.deleteMany(ids)
+        },
+        bottomInset = bottomInset,
+        modifier = modifier,
+    )
+    if (showCalendar) {
+        DateRangeModal(
+            initial = range,
+            onConfirm = {
+                notesVm.setRange(it)
+                showCalendar = false
+            },
+            onClear = {
+                notesVm.setRange(null)
+                showCalendar = false
+            },
+            onDismiss = { showCalendar = false },
+        )
     }
 }
