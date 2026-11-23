@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -295,16 +298,20 @@ private fun OverflowMenu(
     onBack: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.widthIn(min = 212.dp, max = 280.dp)) {
-        val extraStyles = maxHeight >= 360.dp
-        Column(Modifier.fillMaxWidth()) {
+        // A popup can be measured with an infinite max. Scroll needs a finite cap.
+        val menuMax = if (maxHeight.value.isFinite()) maxHeight else 480.dp
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = menuMax)
+                .verticalScroll(rememberScrollState()),
+        ) {
         OverflowLabel("Выбрать всё", onSelectAll)
         OverflowLabel("Скрытый", onHidden)
         OverflowLabel("Жирный", onBold)
         OverflowLabel("Курсив", onItalic)
-        if (extraStyles) {
-            OverflowLabel("Зачёркнутый", onStrike)
-            OverflowLabel("Подчёркнутый", onUnderline)
-        }
+        OverflowLabel("Зачёркнутый", onStrike)
+        OverflowLabel("Подчёркнутый", onUnderline)
         Box(
             Modifier
                 .padding(top = 2.dp)
