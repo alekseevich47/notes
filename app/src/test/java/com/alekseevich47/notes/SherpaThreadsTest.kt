@@ -26,5 +26,6 @@ class NotesPrefsTest {
         assertEquals("notes_widget_prefs", NotesPrefs.FILE)
         assertEquals("warmup_on_boot", NotesPrefs.WARMUP_ON_BOOT)
         assertEquals("recognizer", NotesPrefs.RECOGNIZER)
+        assertEquals("theme_mode", NotesPrefs.THEME_MODE)
     }
 }

@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.ui.settings
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
@@ -9,10 +10,12 @@ import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.PinThrottle
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
+import com.alekseevich47.notes.data.secure.ThemeStore
 import com.alekseevich47.notes.domain.ThemeMode
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.ModelWarmupService
 import com.alekseevich47.notes.service.OemPowerSettings
+import com.alekseevich47.notes.service.WarmupGate
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.StateFlow
@@ -22,9 +25,15 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settings: SecureSettingsStore,
+    private val themeStore: ThemeStore,
     private val downloads: ModelDownloadManager,
 ) : ViewModel() {
-    val theme: StateFlow<ThemeMode> = settings.themeMode
+    private val activityManager = context.getSystemService(ActivityManager::class.java)
+    val warmupAvailable: Boolean = WarmupGate.available(
+        lowRamDevice = activityManager?.isLowRamDevice == true,
+        memoryClassMb = activityManager?.memoryClass ?: 0,
+    )
+    val theme: StateFlow<ThemeMode> = themeStore.themeMode
     val pinHash: StateFlow<String?> = settings.pinHash
     val models: StateFlow<List<ModelCardState>> = downloads.cards
     val modelEnabled: StateFlow<Map<ModelKind, Boolean>> = settings.modelEnabled
@@ -33,11 +42,12 @@ class SettingsViewModel @Inject constructor(
 
     fun setTheme(mode: ThemeMode) {
         val previous = theme.value
-        settings.setTheme(mode)
+        themeStore.setTheme(mode)
         AppLog.i(TAG, "theme $previous -> $mode")
     }
 
     fun setWarmupOnBoot(enabled: Boolean) {
+        if (enabled && !warmupAvailable) return
         settings.setWarmupOnBoot(enabled)
         AppLog.i(TAG, if (enabled) "warmup on" else "warmup off")
         if (enabled) {

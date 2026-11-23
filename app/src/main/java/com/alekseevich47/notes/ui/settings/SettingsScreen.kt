@@ -64,6 +64,7 @@ fun SettingsScreen(
     val models by viewModel.models.collectAsStateWithLifecycle()
     val modelEnabled by viewModel.modelEnabled.collectAsStateWithLifecycle()
     val warmup by viewModel.warmupOnBoot.collectAsStateWithLifecycle()
+    val warmupAvailable = viewModel.warmupAvailable
     val recognizer by viewModel.recognizer.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
@@ -96,20 +97,31 @@ fun SettingsScreen(
                 SettingsCopy.WARMUP_TITLE,
                 modifier = Modifier
                     .weight(1f)
-                    .then(if (warmup) Modifier.clickable(onClick = viewModel::openWarmupPowerSettings) else Modifier),
+                    .then(
+                        if (warmup && warmupAvailable) {
+                            Modifier.clickable(onClick = viewModel::openWarmupPowerSettings)
+                        } else {
+                            Modifier
+                        },
+                    ),
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = NotesFont,
             )
             Switch(
-                checked = warmup,
+                checked = warmup && warmupAvailable,
                 onCheckedChange = viewModel::setWarmupOnBoot,
+                enabled = warmupAvailable,
                 colors = SwitchDefaults.colors(checkedTrackColor = NotesPurple),
             )
         }
         Text(
-            SettingsCopy.WARMUP_SUBTITLE,
+            if (warmupAvailable) SettingsCopy.WARMUP_SUBTITLE else SettingsCopy.WARMUP_UNAVAILABLE,
             modifier = Modifier.then(
-                if (warmup) Modifier.clickable(onClick = viewModel::openWarmupPowerSettings) else Modifier,
+                if (warmup && warmupAvailable) {
+                    Modifier.clickable(onClick = viewModel::openWarmupPowerSettings)
+                } else {
+                    Modifier
+                },
             ),
             fontFamily = NotesFont,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

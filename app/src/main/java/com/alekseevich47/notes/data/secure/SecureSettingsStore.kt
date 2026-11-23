@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.alekseevich47.notes.data.download.ModelKind
-import com.alekseevich47.notes.domain.ThemeMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,9 +17,8 @@ class SecureSettingsStore @Inject constructor(
     @ApplicationContext context: Context,
 ) {
     private val appContext = context.applicationContext
-    private val prefs: SharedPreferences = open(context)
+    private val prefs: SharedPreferences = openSecurePrefs(context)
     private val _pinHash = MutableStateFlow(prefs.getString(KEY_PIN, null))
-    private val _theme = MutableStateFlow(readTheme())
     private val _modelEnabled = MutableStateFlow(readModelFlags())
     private val _warmupOnBoot = MutableStateFlow(prefs.getBoolean(NotesPrefs.WARMUP_ON_BOOT, false))
     private val _recognizer = MutableStateFlow(
@@ -28,7 +26,6 @@ class SecureSettingsStore @Inject constructor(
     )
 
     val pinHash: StateFlow<String?> = _pinHash.asStateFlow()
-    val themeMode: StateFlow<ThemeMode> = _theme.asStateFlow()
     val warmupOnBoot: StateFlow<Boolean> = _warmupOnBoot.asStateFlow()
     val recognizer: StateFlow<String> = _recognizer.asStateFlow()
 
@@ -98,11 +95,6 @@ class SecureSettingsStore @Inject constructor(
         }.getOrNull()
     }
 
-    fun setTheme(mode: ThemeMode) {
-        prefs.edit().putString(KEY_THEME, mode.name).apply()
-        _theme.value = mode
-    }
-
     fun setWarmupOnBoot(enabled: Boolean) {
         prefs.edit().putBoolean(NotesPrefs.WARMUP_ON_BOOT, enabled).commit()
         _warmupOnBoot.value = enabled
@@ -124,12 +116,6 @@ class SecureSettingsStore @Inject constructor(
             .commit()
     }
 
-    private fun readTheme(): ThemeMode {
-        val raw = prefs.getString(KEY_THEME, ThemeMode.SYSTEM.name)
-        return runCatching { ThemeMode.valueOf(raw ?: ThemeMode.SYSTEM.name) }
-            .getOrDefault(ThemeMode.SYSTEM)
-    }
-
     private fun readModelFlags(): Map<ModelKind, Boolean> {
         val stored = linkedMapOf<ModelKind, Boolean>()
         ModelKind.entries.forEach { kind ->
@@ -141,30 +127,35 @@ class SecureSettingsStore @Inject constructor(
 
     private fun modelKey(kind: ModelKind) = "model_enabled_${kind.name}"
 
-    private fun open(context: Context): SharedPreferences {
-        return runCatching {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                PREFS,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
-        }.getOrElse {
-            context.getSharedPreferences(PREFS_FALLBACK, Context.MODE_PRIVATE)
-        }
-    }
-
     private companion object {
-        const val PREFS = "notes_secure"
-        const val PREFS_FALLBACK = "notes_secure_fallback"
         const val KEY_PIN = "pin_hash"
-        const val KEY_THEME = "theme_mode"
         const val KEY_PIN_FAILURES = "pin_failures"
         const val KEY_PIN_LOCKED_UNTIL = "pin_locked_until_elapsed"
         const val KEY_PIN_BOOT = "pin_boot_id"
     }
 }
+
+internal fun openSecurePrefs(context: Context): SharedPreferences {
+    return runCatching {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            context,
+            SECURE_PREFS,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+    }.getOrElse {
+        context.getSharedPreferences(SECURE_PREFS_FALLBACK, Context.MODE_PRIVATE)
+    }
+}
+
+/** Old installs stored the theme next to the PIN. Callers skip this once the plain key exists. */
+internal fun readLegacyThemeName(context: Context): String? {
+    return openSecurePrefs(context).getString(NotesPrefs.THEME_MODE, null)
+}
+
+private const val SECURE_PREFS = "notes_secure"
+private const val SECURE_PREFS_FALLBACK = "notes_secure_fallback"

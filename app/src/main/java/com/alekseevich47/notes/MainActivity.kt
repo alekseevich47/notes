@@ -10,9 +10,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.alekseevich47.notes.data.secure.SecureSettingsStore
+import com.alekseevich47.notes.data.secure.ThemeStore
 import com.alekseevich47.notes.log.AppLog
-import com.alekseevich47.notes.service.ModelWarmupService
 import com.alekseevich47.notes.ui.NotesRoot
 import com.alekseevich47.notes.ui.theme.NotesTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -20,7 +19,7 @@ import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    @Inject lateinit var settings: SecureSettingsStore
+    @Inject lateinit var themeStore: ThemeStore
 
     private var openNoteId by mutableLongStateOf(-1L)
     private var askMic by mutableStateOf(false)
@@ -32,7 +31,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         consumeIntent(intent)
         setContent {
-            val theme by settings.themeMode.collectAsStateWithLifecycle()
+            val theme by themeStore.themeMode.collectAsStateWithLifecycle()
             NotesTheme(themeMode = theme) {
                 NotesRoot(
                     pendingNoteId = openNoteId.takeIf { it > 0 },
@@ -49,7 +48,6 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         AppLog.i(TAG, "onStart")
-        ModelWarmupService.start(this)
     }
 
     override fun onResume() {

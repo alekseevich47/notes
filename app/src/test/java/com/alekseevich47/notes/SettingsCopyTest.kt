@@ -35,6 +35,7 @@ class SettingsCopyTest {
     @Test
     fun warmupCopyNamesOemAutostartBatteryAndUnlock() {
         assertEquals("Автозагрузка моделей", SettingsCopy.WARMUP_TITLE)
+        assertEquals("на этом устройстве недоступно", SettingsCopy.WARMUP_UNAVAILABLE)
         val subtitle = SettingsCopy.WARMUP_SUBTITLE
         assertTrue(subtitle.contains("Tecno"))
         assertTrue(subtitle.contains("Xiaomi"))

@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.service
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -182,6 +183,14 @@ class ModelWarmupService : Service() {
         private val lifetime = WarmLifetime()
 
         fun start(context: Context) {
+            val manager = context.getSystemService(ActivityManager::class.java)
+            if (!WarmupGate.available(
+                    lowRamDevice = manager?.isLowRamDevice == true,
+                    memoryClassMb = manager?.memoryClass ?: 0,
+                )
+            ) {
+                return
+            }
             try {
                 if (!NotesPrefs.open(context).getBoolean(NotesPrefs.WARMUP_ON_BOOT, false)) return
                 val intent = Intent(context, ModelWarmupService::class.java)

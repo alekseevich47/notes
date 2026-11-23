@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 /**
  * Plain preferences the widget process can read without Hilt.
  * [SecureSettingsStore] mirrors the warmup switch and the recognizer choice here.
+ * The theme lives here as well, so the first frame does not open the keystore.
  */
 object NotesPrefs {
     const val FILE = "notes_widget_prefs"
@@ -14,6 +15,7 @@ object NotesPrefs {
     const val RECOGNIZER_TONE = "tone"
     const val RECOGNIZER_SYSTEM = "system"
     const val SEARCH_INDEX_V2 = "search_index_v2"
+    const val THEME_MODE = "theme_mode"
 
     fun open(context: Context): SharedPreferences {
         return context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
