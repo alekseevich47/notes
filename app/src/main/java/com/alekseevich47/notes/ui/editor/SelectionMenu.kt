@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -42,8 +43,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -65,8 +72,8 @@ import kotlin.math.min
 /**
  * Telegram-style selection bubble. Primary row is Cut / Copy / Paste / overflow.
  * Paste is shown only when the clipboard has text. The formatting list is
- * Select all, the styles, Plain, then Back. Active styles carry a check.
- * Quote is intentionally absent.
+ * Select all, Plain, then the styles, and Back stays put under the scroller.
+ * Active styles carry a check. Quote is intentionally absent.
  */
 @Composable
 fun SelectionActionsPopup(
@@ -92,7 +99,7 @@ fun SelectionActionsPopup(
 ) {
     val density = LocalDensity.current
     val gapPx = with(density) { 10.dp.roundToPx() }
-    val marginPx = with(density) { 8.dp.roundToPx() }
+    val marginPx = with(density) { MenuScreenMargin.roundToPx() }
     val shadowRoom = softShadowRoom(10.dp)
     val shadowPadPx = with(density) { shadowRoom.roundToPx() }
     Popup(
@@ -125,17 +132,27 @@ fun SelectionActionsPopup(
     ) {
         val shape = RoundedCornerShape(16.dp)
         val plate = MaterialTheme.colorScheme.surface
-        Box(
-            modifier = Modifier
-                .softShadowPadding(
-                    shape = shape,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
-                    room = shadowRoom,
-                    steps = softShadowSteps(LocalPerfTier.current),
-                )
-                .clip(shape)
-                .background(plate),
-        ) {
+        // The popup is measured against the window. Keep the plate inside the
+        // same margin placeSelectionMenu uses, so the ⋮ button is never the
+        // piece that gets squeezed off the screen.
+        BoxWithConstraints {
+            val maxPlate = if (maxWidth.value.isFinite()) {
+                (maxWidth - MenuScreenMargin * 2).coerceAtLeast(0.dp)
+            } else {
+                maxWidth
+            }
+            Box(
+                modifier = Modifier
+                    .softShadowPadding(
+                        shape = shape,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                        room = shadowRoom,
+                        steps = softShadowSteps(LocalPerfTier.current),
+                    )
+                    .widthIn(max = maxPlate)
+                    .clip(shape)
+                    .background(plate),
+            ) {
             KeepMenuAboveHandles()
             val canPaste = LocalClipboardManager.current.hasText()
             AnimatedContent(
@@ -180,8 +197,25 @@ fun SelectionActionsPopup(
                     )
                 }
             }
+            }
         }
     }
+}
+
+private val MenuScreenMargin = 8.dp
+private val OverflowRowHeight = 48.dp
+private val BackRowHeight = 48.dp
+private val OverflowDividerHeight = 0.6.dp
+private val OverflowDividerTop = 2.dp
+
+/**
+ * How many overflow rows fit above the fixed back block.
+ * Short windows floor at 3; anything taller than six rows stays at 6.
+ */
+internal fun overflowVisibleRows(maxHeightDp: Float, rowDp: Float, backBlockDp: Float): Int {
+    if (!(rowDp > 0f) || !maxHeightDp.isFinite()) return 6
+    val rows = ((maxHeightDp - backBlockDp) / rowDp).toInt()
+    return rows.coerceIn(3, 6)
 }
 
 private fun placeSelectionMenu(
@@ -297,10 +331,18 @@ private fun PrimaryMenu(
     onPaste: () -> Unit,
     onMore: () -> Unit,
 ) {
+    // Labels take only the width left after the divider and the ⋮ button.
+    // Those two have no weight, so Row measures them first and cannot
+    // collapse the button into a stick when the labels are wide.
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-        BubbleLabel("Вырезать", onCut)
-        BubbleLabel("Копировать", onCopy)
-        if (canPaste) BubbleLabel("Вставить", onPaste)
+        Row(
+            modifier = Modifier.weight(1f, fill = false),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BubbleLabel("Вырезать", onCut)
+            BubbleLabel("Копировать", onCopy)
+            if (canPaste) BubbleLabel("Вставить", onPaste)
+        }
         Box(
             modifier = Modifier
                 .padding(horizontal = 4.dp)
@@ -332,10 +374,13 @@ private fun BubbleLabel(text: String, onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         fontFamily = NotesFont,
         fontWeight = FontWeight.Medium,
         fontSize = 15.sp,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
         color = MaterialTheme.colorScheme.onSurface,
     )
 }
@@ -354,54 +399,105 @@ private fun OverflowMenu(
     onPlain: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val scroll = rememberScrollState()
+    val plate = MaterialTheme.colorScheme.surface
     BoxWithConstraints(Modifier.widthIn(min = 212.dp, max = 280.dp)) {
         // A popup can be measured with an infinite max. Scroll needs a finite cap.
-        val menuMax = if (maxHeight.value.isFinite()) maxHeight else 480.dp
+        val finiteHeight = maxHeight.value.isFinite()
+        val backBlockDp = BackRowHeight.value + OverflowDividerTop.value + OverflowDividerHeight.value
+        val visibleRows = if (finiteHeight) {
+            overflowVisibleRows(maxHeight.value, OverflowRowHeight.value, backBlockDp)
+        } else {
+            6
+        }
         Column(
             Modifier
                 .fillMaxWidth()
-                .heightIn(max = menuMax)
-                .verticalScroll(rememberScrollState()),
+                .then(if (finiteHeight) Modifier else Modifier.heightIn(max = 480.dp)),
         ) {
-        OverflowLabel("Выбрать всё", onClick = onSelectAll)
-        OverflowLabel("Жирный", checked = MarkStyle.BOLD in activeStyles, onClick = onBold)
-        OverflowLabel("Курсив", checked = MarkStyle.ITALIC in activeStyles, onClick = onItalic)
-        OverflowLabel("Зачёркнутый", checked = MarkStyle.STRIKE in activeStyles, onClick = onStrike)
-        OverflowLabel("Подчёркнутый", checked = MarkStyle.UNDERLINE in activeStyles, onClick = onUnderline)
-        OverflowLabel("Моно", checked = MarkStyle.MONO in activeStyles, onClick = onMono)
-        OverflowLabel("Ссылка", checked = MarkStyle.LINK in activeStyles, onClick = onLink)
-        OverflowLabel("Скрытый", checked = MarkStyle.HIDDEN in activeStyles, onClick = onHidden)
-        OverflowLabel("Обычный", onClick = onPlain)
-        Box(
-            Modifier
-                .padding(top = 2.dp)
-                .fillMaxWidth()
-                .height(0.6.dp)
-                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(OverflowRowHeight * visibleRows)
+                    .menuScrollFades(scroll, plate),
+            ) {
+                Column(Modifier.verticalScroll(scroll)) {
+                    OverflowLabel("Выбрать всё", onClick = onSelectAll)
+                    OverflowLabel("Обычный", onClick = onPlain)
+                    OverflowLabel("Жирный", checked = MarkStyle.BOLD in activeStyles, onClick = onBold)
+                    OverflowLabel("Курсив", checked = MarkStyle.ITALIC in activeStyles, onClick = onItalic)
+                    OverflowLabel("Подчёркнутый", checked = MarkStyle.UNDERLINE in activeStyles, onClick = onUnderline)
+                    OverflowLabel("Скрытый", checked = MarkStyle.HIDDEN in activeStyles, onClick = onHidden)
+                    OverflowLabel("Зачёркнутый", checked = MarkStyle.STRIKE in activeStyles, onClick = onStrike)
+                    OverflowLabel("Моно", checked = MarkStyle.MONO in activeStyles, onClick = onMono)
+                    OverflowLabel("Ссылка", checked = MarkStyle.LINK in activeStyles, onClick = onLink)
+                }
+            }
+            Box(
+                Modifier
+                    .padding(top = OverflowDividerTop)
+                    .fillMaxWidth()
+                    .height(OverflowDividerHeight)
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(BackRowHeight)
+                    .clickable(onClick = onBack)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Назад",
+                    fontFamily = NotesFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Fades the plate color over the scroll edges that still have hidden rows.
+ * Drawn with the content, so a hidden menu does not animate and nothing is
+ * rendered into an offscreen layer.
+ */
+private fun Modifier.menuScrollFades(scroll: ScrollState, plate: Color): Modifier = drawWithContent {
+    drawContent()
+    val fadePx = 12.dp.toPx()
+    if (fadePx <= 0f) return@drawWithContent
+    if (scroll.canScrollForward) {
+        val top = (size.height - fadePx).coerceAtLeast(0f)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(plate.copy(alpha = 0f), plate),
+                startY = top,
+                endY = size.height,
+            ),
+            topLeft = Offset(0f, top),
+            size = Size(size.width, size.height - top),
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onBack)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.AutoMirrored.Outlined.ArrowBack,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                "Назад",
-                fontFamily = NotesFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-        }
+    }
+    if (scroll.canScrollBackward) {
+        val height = fadePx.coerceAtMost(size.height)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(plate, plate.copy(alpha = 0f)),
+                startY = 0f,
+                endY = height,
+            ),
+            size = Size(size.width, height),
+        )
     }
 }
 
@@ -414,8 +510,9 @@ private fun OverflowLabel(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .height(OverflowRowHeight)
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
