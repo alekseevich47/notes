@@ -53,6 +53,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -67,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -240,7 +242,7 @@ internal fun growingColumnWidths(
 }
 
 @Composable
-fun TableBlock(
+internal fun TableBlock(
     table: NoteTable,
     blockIndex: Int,
     readOnly: Boolean = false,
@@ -250,6 +252,8 @@ fun TableBlock(
     onDelete: () -> Unit,
     onAskTable: () -> Unit,
     onRequestUnlock: () -> Unit,
+    pinDialogVisible: Boolean = false,
+    surface: NoteSurfaceBridge? = null,
     modifier: Modifier = Modifier,
 ) {
     val rows = NoteTables.normalized(table.cells)
@@ -465,6 +469,8 @@ fun TableBlock(
                                     onChange = onChange,
                                     onAskTable = onAskTable,
                                     onRequestUnlock = onRequestUnlock,
+                                    pinDialogVisible = pinDialogVisible,
+                                    surface = surface,
                                     onFocused = { focused ->
                                         if (focused) {
                                             active = span.row to span.col
@@ -774,6 +780,8 @@ private fun TableCellEditor(
     onChange: (NoteTable) -> Unit,
     onAskTable: () -> Unit,
     onRequestUnlock: () -> Unit,
+    pinDialogVisible: Boolean = false,
+    surface: NoteSurfaceBridge? = null,
     onFocused: (Boolean) -> Unit,
     onCellMenu: () -> Unit,
 ) {
@@ -785,7 +793,15 @@ private fun TableCellEditor(
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var menuVisible by remember { mutableStateOf(false) }
     var menuOverflow by remember { mutableStateOf(false) }
+    var pasteAnchor by remember { mutableStateOf<Rect?>(null) }
     var linkDraft by remember { mutableStateOf<TextRange?>(null) }
+    val clearPaste = remember { { pasteAnchor = null } }
+    if (pinDialogVisible) pasteAnchor = null
+    DisposableEffect(surface) {
+        val bridge = surface ?: return@DisposableEffect onDispose { }
+        bridge.addBodyDownListener(clearPaste)
+        onDispose { bridge.removeBodyDownListener(clearPaste) }
+    }
     val clipboard = LocalClipboardManager.current
     val platformClipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
     val platformToolbar = LocalTextToolbar.current
@@ -823,6 +839,8 @@ private fun TableCellEditor(
     fun commit(next: TextFieldValue) {
         if (readOnly) return
         val previous = field.text
+        val previousSelection = field.selection
+        if (next.text != previous || next.selection != previousSelection) pasteAnchor = null
         if (!hiddenUnlocked && HiddenText.editTouches(marks, previous, next.text)) {
             onRequestUnlock()
             return
@@ -851,6 +869,19 @@ private fun TableCellEditor(
         onChange(NoteTables.withCellMarks(table, row, col, MarkEdits.toggle(marks, style, start, end)))
         menuVisible = false
     }
+    fun pasteIntoCell() {
+        val clip = clipboard.getText()?.text
+        val a = field.selection.min
+        val b = field.selection.max
+        if (!clip.isNullOrEmpty() && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
+            val text = field.text.substring(0, a) + clip + field.text.substring(b)
+            commit(TextFieldValue(text, TextRange((a + clip.length).coerceAtMost(text.length))))
+        } else if (!clip.isNullOrEmpty() && !hiddenUnlocked) {
+            onRequestUnlock()
+        }
+        pasteAnchor = null
+        menuVisible = false
+    }
     SideEffect {
         if (!focused) return@SideEffect
         formats.editingCell = true
@@ -876,6 +907,22 @@ private fun TableCellEditor(
         }
     }
     toolbar.onSelectionGestureBegan = { menuVisible = false }
+    toolbar.onPasteMenu = { _ ->
+        val result = layout
+        if (result != null) {
+            val cursor = field.selection.end.coerceIn(0, field.text.length)
+            pasteAnchor = result.getCursorRect(cursor)
+        }
+    }
+    toolbar.onPasteMenuHidden = clearPaste
+    BackHandler(enabled = pasteAnchor != null || menuVisible) {
+        pasteAnchor = null
+        menuVisible = false
+        menuOverflow = false
+        if (!field.selection.collapsed) {
+            field = field.copy(selection = TextRange(field.selection.end))
+        }
+    }
     val cellStyle = MaterialTheme.typography.bodyMedium.copy(
         fontFamily = NotesFont,
         color = ink,
@@ -937,7 +984,10 @@ private fun TableCellEditor(
                 onTextLayout = { layout = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onFocusChanged { state -> onFocused(state.isFocused) }
+                    .onFocusChanged { state ->
+                        if (!state.isFocused) pasteAnchor = null
+                        onFocused(state.isFocused)
+                    }
                     .then(spoilerModifier)
                     .followLinkTaps(
                         marks = marks,
@@ -994,18 +1044,7 @@ private fun TableCellEditor(
                         }
                         menuVisible = false
                     },
-                    onPaste = {
-                        val clip = clipboard.getText()?.text
-                        val a = field.selection.min
-                        val b = field.selection.max
-                        if (!clip.isNullOrEmpty() && (hiddenUnlocked || !HiddenText.cursorInside(marks, a, b))) {
-                            val text = field.text.substring(0, a) + clip + field.text.substring(b)
-                            commit(TextFieldValue(text, TextRange((a + clip.length).coerceAtMost(text.length))))
-                        } else if (!clip.isNullOrEmpty() && !hiddenUnlocked) {
-                            onRequestUnlock()
-                        }
-                        menuVisible = false
-                    },
+                    onPaste = { pasteIntoCell() },
                     onMore = { menuOverflow = true },
                     onDismiss = {
                         menuVisible = false
@@ -1042,6 +1081,14 @@ private fun TableCellEditor(
                     },
                 )
             }
+        }
+        val anchor = pasteAnchor
+        if (anchor != null && field.selection.collapsed && focused && clipboard.hasText()) {
+            PasteActionPopup(
+                anchor = anchor,
+                onPaste = { pasteIntoCell() },
+                onDismiss = clearPaste,
+            )
         }
         val draft = linkDraft
         if (draft != null) {

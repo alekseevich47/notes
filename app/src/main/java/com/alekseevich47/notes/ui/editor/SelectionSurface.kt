@@ -47,8 +47,17 @@ internal class NoteSurfaceBridge {
     var toRoot: (Offset) -> Offset? = { null }
 
     private val blocks = mutableMapOf<Int, BlockSurfaceHandlers>()
+    private val bodyDownListeners = mutableListOf<() -> Unit>()
     private var atDown: SelectionSnapshot = SelectionSnapshot.Collapsed
     private var downIndex: Int? = null
+
+    fun addBodyDownListener(listener: () -> Unit) {
+        if (listener !in bodyDownListeners) bodyDownListeners.add(listener)
+    }
+
+    fun removeBodyDownListener(listener: () -> Unit) {
+        bodyDownListeners.remove(listener)
+    }
 
     fun register(blockIndex: Int, handlers: BlockSurfaceHandlers) {
         blocks[blockIndex] = handlers
@@ -72,6 +81,7 @@ internal class NoteSurfaceBridge {
     }
 
     fun down() {
+        for (listener in bodyDownListeners) listener()
         val index = activeIndex()
         downIndex = index
         atDown = index?.let { blocks[it]?.readSelection() } ?: SelectionSnapshot.Collapsed

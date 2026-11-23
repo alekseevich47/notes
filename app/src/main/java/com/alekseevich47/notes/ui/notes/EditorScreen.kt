@@ -368,6 +368,8 @@ fun EditorScreen(
                                                 onDelete = onDelete,
                                                 onAskTable = onAskTable,
                                                 onRequestUnlock = onRequestUnlock,
+                                                pinDialogVisible = askPin,
+                                                surface = surface,
                                             )
                                         }
                                     }

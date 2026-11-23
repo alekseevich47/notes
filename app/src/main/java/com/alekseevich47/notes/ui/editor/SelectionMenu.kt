@@ -52,7 +52,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -99,48 +98,20 @@ fun SelectionActionsPopup(
     onLink: () -> Unit,
     onPlain: () -> Unit,
 ) {
-    val density = LocalDensity.current
-    val gapPx = with(density) { 10.dp.roundToPx() }
-    val marginPx = with(density) { MenuScreenMargin.roundToPx() }
-    val shadowRoom = softShadowRoom(10.dp)
-    val shadowPadPx = with(density) { shadowRoom.roundToPx() }
     // Filled during popup measure, before the window is positioned. Not state:
     // a new size must not recompose the editor on the next key.
     val reserve = remember { PlateReserve() }
-    Popup(
-        popupPositionProvider = object : PopupPositionProvider {
-            override fun calculatePosition(
-                anchorBounds: IntRect,
-                windowSize: IntSize,
-                layoutDirection: LayoutDirection,
-                popupContentSize: IntSize,
-            ): IntOffset {
-                return placeSelectionMenu(
-                    anchorBounds = anchorBounds,
-                    windowSize = windowSize,
-                    popupContentSize = popupContentSize,
-                    startHandle = startHandle,
-                    endHandle = endHandle,
-                    gapPx = gapPx,
-                    marginPx = marginPx,
-                    shadowPadPx = shadowPadPx,
-                    reserve = reserve.size,
-                )
-            }
-        },
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(
-            focusable = false,
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false,
-            clippingEnabled = false,
-        ),
+    SelectionBubble(
+        startHandle = startHandle,
+        endHandle = endHandle,
+        onDismiss = onDismiss,
+        reserve = reserve,
     ) {
         val canPaste = LocalClipboardManager.current.hasText()
         SubcomposeLayout { constraints ->
             val windowWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else -1
             if (!reserve.matches(windowWidth, canPaste, activeStyles)) {
-                val menuConstraints = menuMeasureConstraints(constraints, marginPx, shadowPadPx)
+                val menuConstraints = constraints.copy(minWidth = 0, minHeight = 0)
                 val primary = subcompose(ReservePrimary) {
                     PrimaryMenu(
                         canPaste = canPaste,
@@ -175,70 +146,137 @@ fun SelectionActionsPopup(
                     ),
                 )
             }
-            val content = subcompose(ReserveContent) {
-                val shape = RoundedCornerShape(16.dp)
-                val plate = MaterialTheme.colorScheme.surface
-                // The popup is measured against the window. Keep the plate inside the
-                // same margin placeSelectionMenu uses, so the ⋮ button is never the
-                // piece that gets squeezed off the screen.
-                BoxWithConstraints {
-                    val maxPlate = if (maxWidth.value.isFinite()) {
-                        (maxWidth - MenuScreenMargin * 2).coerceAtLeast(0.dp)
+            val page = subcompose(ReserveContent) {
+                AnimatedContent(
+                    targetState = overflow,
+                    transitionSpec = {
+                        (fadeIn(tween(140)) togetherWith fadeOut(tween(100))).using(
+                            SizeTransform(clip = false) { _, _ -> snap() },
+                        )
+                    },
+                    label = "selection-menu",
+                ) { formatting ->
+                    if (formatting) {
+                        OverflowMenu(
+                            activeStyles = activeStyles,
+                            onHidden = onHidden,
+                            onSelectAll = onSelectAll,
+                            onBold = onBold,
+                            onItalic = onItalic,
+                            onStrike = onStrike,
+                            onUnderline = onUnderline,
+                            onMono = onMono,
+                            onLink = onLink,
+                            onPlain = onPlain,
+                            onBack = onBack,
+                        )
                     } else {
-                        maxWidth
-                    }
-                    Box(
-                        modifier = Modifier
-                            .softShadowPadding(
-                                shape = shape,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
-                                room = shadowRoom,
-                                steps = softShadowSteps(LocalPerfTier.current),
-                            )
-                            .widthIn(max = maxPlate)
-                            .clip(shape)
-                            .background(plate),
-                    ) {
-                        KeepMenuAboveHandles()
-                        AnimatedContent(
-                            targetState = overflow,
-                            transitionSpec = {
-                                (fadeIn(tween(140)) togetherWith fadeOut(tween(100))).using(
-                                    SizeTransform(clip = false) { _, _ -> snap() },
-                                )
-                            },
-                            label = "selection-menu",
-                        ) { formatting ->
-                            if (formatting) {
-                                OverflowMenu(
-                                    activeStyles = activeStyles,
-                                    onHidden = onHidden,
-                                    onSelectAll = onSelectAll,
-                                    onBold = onBold,
-                                    onItalic = onItalic,
-                                    onStrike = onStrike,
-                                    onUnderline = onUnderline,
-                                    onMono = onMono,
-                                    onLink = onLink,
-                                    onPlain = onPlain,
-                                    onBack = onBack,
-                                )
-                            } else {
-                                PrimaryMenu(
-                                    canPaste = canPaste,
-                                    onCut = onCut,
-                                    onCopy = onCopy,
-                                    onPaste = onPaste,
-                                    onMore = onMore,
-                                )
-                            }
-                        }
+                        PrimaryMenu(
+                            canPaste = canPaste,
+                            onCut = onCut,
+                            onCopy = onCopy,
+                            onPaste = onPaste,
+                            onMore = onMore,
+                        )
                     }
                 }
             }.first().measure(constraints)
-            layout(content.width, content.height) {
-                content.place(0, 0)
+            layout(page.width, page.height) {
+                page.place(0, 0)
             }
+        }
+    }
+}
+
+/**
+ * Shared chrome for the selection menu and the one-button paste bubble.
+ * [reserve] is the plate used to decide above/below and the horizontal center.
+ * An empty reserve follows the plate that is on screen.
+ */
+@Composable
+private fun SelectionBubble(
+    startHandle: Rect,
+    endHandle: Rect,
+    onDismiss: () -> Unit,
+    reserve: PlateReserve = emptyPlateReserve,
+    content: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current
+    val gapPx = with(density) { 10.dp.roundToPx() }
+    val marginPx = with(density) { MenuScreenMargin.roundToPx() }
+    val shadowRoom = softShadowRoom(10.dp)
+    val shadowPadPx = with(density) { shadowRoom.roundToPx() }
+    Popup(
+        popupPositionProvider = object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize,
+            ): IntOffset {
+                return placeSelectionMenu(
+                    anchorBounds = anchorBounds,
+                    windowSize = windowSize,
+                    popupContentSize = popupContentSize,
+                    startHandle = startHandle,
+                    endHandle = endHandle,
+                    gapPx = gapPx,
+                    marginPx = marginPx,
+                    shadowPadPx = shadowPadPx,
+                    reserve = reserve.size,
+                )
+            }
+        },
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            clippingEnabled = false,
+        ),
+    ) {
+        val shape = RoundedCornerShape(16.dp)
+        val plate = MaterialTheme.colorScheme.surface
+        // The popup is measured against the window. Keep the plate inside the
+        // same margin placeSelectionMenu uses, so the ⋮ button is never the
+        // piece that gets squeezed off the screen.
+        BoxWithConstraints {
+            val maxPlate = if (maxWidth.value.isFinite()) {
+                (maxWidth - MenuScreenMargin * 2).coerceAtLeast(0.dp)
+            } else {
+                maxWidth
+            }
+            Box(
+                modifier = Modifier
+                    .softShadowPadding(
+                        shape = shape,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                        room = shadowRoom,
+                        steps = softShadowSteps(LocalPerfTier.current),
+                    )
+                    .widthIn(max = maxPlate)
+                    .clip(shape)
+                    .background(plate),
+            ) {
+                KeepMenuAboveHandles()
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+fun PasteActionPopup(anchor: Rect, onPaste: () -> Unit, onDismiss: () -> Unit) {
+    SelectionBubble(
+        startHandle = anchor,
+        endHandle = anchor,
+        onDismiss = onDismiss,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        ) {
+            BubbleLabel("Вставить", onPaste)
         }
     }
 }
@@ -287,24 +325,7 @@ private class PlateReserve {
     }
 }
 
-private fun menuMeasureConstraints(window: Constraints, marginPx: Int, shadowPadPx: Int): Constraints {
-    if (!window.hasBoundedWidth) {
-        val height = if (window.hasBoundedHeight) {
-            (window.maxHeight - shadowPadPx * 2).coerceAtLeast(0)
-        } else {
-            10_000
-        }
-        return Constraints(0, 10_000, 0, height)
-    }
-    val afterShadow = (window.maxWidth - shadowPadPx * 2).coerceAtLeast(0)
-    val afterMargin = (window.maxWidth - marginPx * 2).coerceAtLeast(0)
-    val maxHeight = if (window.hasBoundedHeight) {
-        (window.maxHeight - shadowPadPx * 2).coerceAtLeast(0)
-    } else {
-        Constraints.Infinity
-    }
-    return Constraints(0, min(afterShadow, afterMargin), 0, maxHeight)
-}
+private val emptyPlateReserve = PlateReserve()
 
 /**
  * Places the plate so the horizontal center and the edge nearest the text stay
