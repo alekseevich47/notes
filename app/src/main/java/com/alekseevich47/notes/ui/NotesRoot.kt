@@ -134,35 +134,39 @@ fun NotesRoot(
 
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize()) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .hazeSource(state = hazeState),
-            ) {
-                when (ui.screen) {
-                    Screen.LIST -> NotesListPage(
-                        notesVm = notesVm,
-                        hazeState = hazeState,
-                        playingNoteId = playback.noteId,
-                        onOpen = shell::openEditor,
-                        onCreate = shell::createManual,
-                        bottomInset = listInset,
-                        modifier = Modifier.statusBarsPadding(),
-                    )
-                    Screen.SETTINGS -> SettingsScreen(
-                        onToast = shell::toast,
-                        modifier = Modifier.statusBarsPadding(),
-                    )
-                    Screen.EDITOR -> ui.editorId?.let { id ->
-                        key(id) {
-                            EditorScreen(
-                                noteId = id,
-                                onBack = {
-                                    shell.showList()
-                                },
-                                onToast = shell::toast,
-                            )
-                        }
+            if (ui.screen == Screen.EDITOR) {
+                ui.editorId?.let { id ->
+                    key(id) {
+                        EditorScreen(
+                            noteId = id,
+                            onBack = {
+                                shell.showList()
+                            },
+                            onToast = shell::toast,
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .hazeSource(state = hazeState),
+                ) {
+                    if (ui.screen == Screen.SETTINGS) {
+                        SettingsScreen(
+                            onToast = shell::toast,
+                            modifier = Modifier.statusBarsPadding(),
+                        )
+                    } else {
+                        NotesListPage(
+                            notesVm = notesVm,
+                            hazeState = hazeState,
+                            playingNoteId = playback.noteId,
+                            onOpen = shell::openEditor,
+                            onCreate = shell::createManual,
+                            bottomInset = listInset,
+                            modifier = Modifier.statusBarsPadding(),
+                        )
                     }
                 }
             }
