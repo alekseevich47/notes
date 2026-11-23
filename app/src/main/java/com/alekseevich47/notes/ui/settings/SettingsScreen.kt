@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,7 @@ import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.domain.ThemeMode
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.components.PinDialog
+import com.alekseevich47.notes.ui.legal.TermsDialog
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
 
@@ -76,6 +78,7 @@ fun SettingsScreen(
     var pinError by remember { mutableStateOf<String?>(null) }
     var pinLockedUntil by remember { mutableLongStateOf(0L) }
     var changeStep by remember { mutableStateOf(ChangeStep.CURRENT) }
+    var showTerms by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier
@@ -245,6 +248,10 @@ fun SettingsScreen(
         ActionText("Отправить лог") {
             runCatching { AppLog.share(context) }
                 .onFailure { onToast("Не удалось отправить лог") }
+        }
+        ActionText("Правила использования") { showTerms = true }
+        if (showTerms) {
+            TermsDialog(onClose = { showTerms = false })
         }
     }
 

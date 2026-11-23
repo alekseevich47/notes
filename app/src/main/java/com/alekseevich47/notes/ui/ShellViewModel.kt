@@ -6,11 +6,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.alekseevich47.notes.data.repository.NotesRepository
+import com.alekseevich47.notes.data.secure.InfoNoticeStore
 import com.alekseevich47.notes.domain.MicPhase
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.PlaybackService
 import com.alekseevich47.notes.service.RecordingService
 import com.alekseevich47.notes.stt.RecordingSession
+import com.alekseevich47.notes.ui.legal.TermsOfUse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,11 +34,13 @@ class ShellViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: NotesRepository,
     val session: RecordingSession,
+    private val infoNotices: InfoNoticeStore,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(ShellUi())
     val ui: StateFlow<ShellUi> = _ui.asStateFlow()
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
+    val infoPending: StateFlow<Int?> = infoNotices.pendingId
 
     init {
         AppLog.i(TAG, "screen enter ${Screen.LIST}")
@@ -73,6 +77,11 @@ class ShellViewModel @Inject constructor(
 
     fun dismissToast() {
         _toast.value = null
+    }
+
+    fun acceptInfo(id: Int) {
+        infoNotices.markSeen(id, TermsOfUse.VERSION)
+        AppLog.i(TAG, "info accepted id=$id terms=${TermsOfUse.VERSION}")
     }
 
     fun toggleRecording() {

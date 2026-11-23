@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
@@ -39,6 +40,9 @@ import com.alekseevich47.notes.ui.components.GlassBottomBar
 import com.alekseevich47.notes.ui.components.ShellTab
 import com.alekseevich47.notes.ui.components.ToastHost
 import com.alekseevich47.notes.service.PlaybackService
+import com.alekseevich47.notes.ui.legal.InfoDialog
+import com.alekseevich47.notes.ui.legal.InfoNotices
+import com.alekseevich47.notes.ui.legal.TermsDialog
 import com.alekseevich47.notes.ui.notes.EditorScreen
 import com.alekseevich47.notes.ui.notes.EditorViewModel
 import com.alekseevich47.notes.ui.notes.NotesListScreen
@@ -238,7 +242,31 @@ fun NotesRoot(
                     onDismiss = { explainPermissions = false },
                 )
             }
+            InfoNoticeOverlay(shell)
         }
+    }
+}
+
+/**
+ * Own subscription so showing or hiding the notice does not recompose the note list.
+ * The accepted flag is written only from «Продолжить».
+ */
+@Composable
+private fun InfoNoticeOverlay(shell: ShellViewModel) {
+    val pending by shell.infoPending.collectAsStateWithLifecycle()
+    var showTerms by rememberSaveable { mutableStateOf(false) }
+    val id = pending
+    if (id != null) {
+        val notice = remember(id) { InfoNotices.byId(id) { showTerms = true } }
+        if (notice != null) {
+            InfoDialog(
+                notice = notice,
+                onAction = { shell.acceptInfo(notice.id) },
+            )
+        }
+    }
+    if (showTerms) {
+        TermsDialog(onClose = { showTerms = false })
     }
 }
 
