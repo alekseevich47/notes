@@ -64,7 +64,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -914,10 +913,13 @@ private fun TableCellEditor(
                 modifier = Modifier
                     .fillMaxWidth()
                     .onFocusChanged { state -> onFocused(state.isFocused) }
-                    .drawWithContent {
-                        if (!hiddenUnlocked) drawSpoilerShadows(spoiler, marks, ink)
-                        drawContent()
-                    },
+                    .then(
+                        if (!hiddenUnlocked) {
+                            Modifier.drawSpoilerShadows(spoiler, marks, ink)
+                        } else {
+                            Modifier
+                        },
+                    ),
                 textStyle = cellStyle,
                 cursorBrush = SolidColor(NotesPurple),
                 keyboardOptions = KeyboardOptions(

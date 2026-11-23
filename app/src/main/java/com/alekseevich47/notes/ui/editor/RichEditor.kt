@@ -51,7 +51,6 @@ import android.view.inputmethod.InputConnectionWrapper
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -538,10 +537,7 @@ internal fun RichNoteEditor(
                             }
                             onFocused(it.isFocused)
                         }
-                        .drawWithContent {
-                            if (censor) drawSpoilerShadows(spoiler, marks, ink)
-                            drawContent()
-                        },
+                        .then(if (censor) Modifier.drawSpoilerShadows(spoiler, marks, ink) else Modifier),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = NotesFont,

@@ -9,14 +9,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.CacheDrawScope
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -33,7 +39,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.alekseevich47.notes.domain.MarkStyle
@@ -103,10 +111,7 @@ fun SpoilerText(
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         onTextLayout = { layout = it },
-        modifier = modifier.drawWithContent {
-            drawSpoilerShadows(spoiler, marks, color)
-            drawContent()
-        },
+        modifier = if (locked) modifier.drawSpoilerShadows(spoiler, marks, color) else modifier,
     )
 }
 
@@ -122,7 +127,21 @@ fun SpoilerText(
 internal class SpoilerPaint(
     val layout: TextLayoutResult?,
     val layer: GraphicsLayer,
+    val cache: SpoilerBlurCache,
 )
+
+/**
+ * Last recorded blur. A later frame draws this instead of recording again.
+ * Identity is the measured layout, the pixel size, and the ink color.
+ */
+internal class SpoilerBlurCache {
+    var layout: TextLayoutResult? = null
+    var width: Int = -1
+    var height: Int = -1
+    var ink: Color = Color.Unspecified
+    var smear: ImageBitmap? = null
+    var ready: Boolean = false
+}
 
 @Composable
 internal fun rememberSpoilerPaint(
@@ -134,6 +153,7 @@ internal fun rememberSpoilerPaint(
     maxLines: Int = Int.MAX_VALUE,
 ): SpoilerPaint {
     val layer = rememberGraphicsLayer()
+    val cache = remember { SpoilerBlurCache() }
     val measurer = rememberTextMeasurer()
     val layout = remember(text, marks, style, ink, widthPx, maxLines) {
         if (widthPx <= 0 || text.isEmpty() || marks.none { it.style == MarkStyle.HIDDEN }) {
@@ -148,7 +168,7 @@ internal fun rememberSpoilerPaint(
             )
         }
     }
-    return SpoilerPaint(layout, layer)
+    return SpoilerPaint(layout, layer, cache)
 }
 
 internal fun spoilerAnnotated(text: String, marks: List<TextMark>, ink: Color): AnnotatedString {
@@ -201,20 +221,87 @@ internal fun previewMarks(parts: List<PreviewPart>): List<TextMark> {
 /**
  * Paints a blurred copy under the real text. [paint] must come from
  * [rememberSpoilerPaint], not from the on-screen text layout.
+ * The layer or the pre-31 smear bitmap is recorded in the cache block.
  */
-internal fun DrawScope.drawSpoilerShadows(paint: SpoilerPaint, marks: List<TextMark>, color: Color) {
-    val layout = paint.layout ?: return
-    if (layout.layoutInput.text.isEmpty()) return
-    if (size.width <= 0f || size.height <= 0f) return
-    val radius = spoilerRadius(layout)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        drawBlurred(paint.layer, layout, radius)
-    } else {
-        drawSmear(layout, marks, color, radius)
+internal fun Modifier.drawSpoilerShadows(
+    paint: SpoilerPaint,
+    marks: List<TextMark>,
+    ink: Color,
+): Modifier = drawWithCache {
+    val frame = recordSpoiler(this, paint, marks, ink)
+    onDrawWithContent {
+        if (frame.ready) {
+            val layer = frame.layer
+            val smear = frame.smear
+            if (layer != null) drawLayer(layer) else if (smear != null) drawImage(smear)
+        }
+        drawContent()
     }
 }
 
-private fun DrawScope.spoilerRadius(layout: TextLayoutResult): Float {
+private class SpoilerFrame(
+    val ready: Boolean,
+    val layer: GraphicsLayer?,
+    val smear: ImageBitmap?,
+)
+
+private fun recordSpoiler(
+    scope: CacheDrawScope,
+    paint: SpoilerPaint,
+    marks: List<TextMark>,
+    ink: Color,
+): SpoilerFrame {
+    val layout = paint.layout
+    val width = scope.size.width.toInt()
+    val height = scope.size.height.toInt()
+    val cache = paint.cache
+    if (layout == null || layout.layoutInput.text.isEmpty() || width <= 0 || height <= 0) {
+        return SpoilerFrame(ready = false, layer = null, smear = null)
+    }
+    val same = cache.ready &&
+        cache.layout === layout &&
+        cache.width == width &&
+        cache.height == height &&
+        cache.ink == ink
+    if (!same) {
+        val radius = scope.spoilerRadius(layout)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            paint.layer.renderEffect = BlurEffect(radius, radius, TileMode.Decal)
+            paint.layer.record(
+                density = scope,
+                layoutDirection = scope.layoutDirection,
+                size = IntSize(width, height),
+            ) {
+                drawText(layout)
+            }
+            cache.smear = null
+        } else {
+            cache.smear = renderSmear(
+                density = scope,
+                direction = scope.layoutDirection,
+                layout = layout,
+                marks = marks,
+                color = ink,
+                width = width,
+                height = height,
+                radiusPx = radius,
+                reuse = cache.smear,
+            )
+        }
+        cache.layout = layout
+        cache.width = width
+        cache.height = height
+        cache.ink = ink
+        cache.ready = true
+    }
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        SpoilerFrame(ready = true, layer = paint.layer, smear = null)
+    } else {
+        SpoilerFrame(ready = cache.smear != null, layer = null, smear = cache.smear)
+    }
+}
+
+private fun Density.spoilerRadius(layout: TextLayoutResult): Float {
     val font = layout.layoutInput.style.fontSize
     val fontPx = if (font == TextUnit.Unspecified) {
         layout.size.height / layout.lineCount.coerceAtLeast(1).toFloat()
@@ -224,43 +311,53 @@ private fun DrawScope.spoilerRadius(layout: TextLayoutResult): Float {
     return (fontPx * HiddenText.BLUR_EM).coerceIn(12.dp.toPx(), 22.dp.toPx())
 }
 
-private fun DrawScope.drawBlurred(layer: GraphicsLayer, layout: TextLayoutResult, radiusPx: Float) {
-    layer.renderEffect = BlurEffect(radiusPx, radiusPx, TileMode.Decal)
-    layer.record(
-        density = this,
-        layoutDirection = layoutDirection,
-        size = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1)),
-    ) {
-        drawText(layout)
-    }
-    drawLayer(layer)
-}
-
 /**
- * API 26–30 has no blur effect. Offset copies of the ink-only layout,
- * clipped to a box wider than the glyphs, average into a blob. A tight clip
- * would rebuild the letter from the overlapping part of each copy.
+ * API 26–30 has no blur effect. Sixteen offset copies are painted once into
+ * a bitmap. Later frames blit that bitmap instead of calling drawText again.
  */
-private fun DrawScope.drawSmear(
+private fun renderSmear(
+    density: Density,
+    direction: LayoutDirection,
     layout: TextLayoutResult,
     marks: List<TextMark>,
     color: Color,
+    width: Int,
+    height: Int,
     radiusPx: Float,
-) {
-    val path = expandedHiddenPath(layout, marks, radiusPx) ?: return
-    val strength = color.alpha.coerceIn(0.45f, 1f)
-    clipPath(path) {
-        val count = 16
-        val distance = radiusPx * 0.85f
-        for (index in 0 until count) {
-            val angle = (Math.PI * 2.0 * index / count).toFloat()
-            drawText(
-                textLayoutResult = layout,
-                topLeft = Offset(cos(angle) * distance, sin(angle) * distance),
-                alpha = 0.2f * strength,
-            )
+    reuse: ImageBitmap?,
+): ImageBitmap? {
+    val path = expandedHiddenPath(layout, marks, radiusPx) ?: return null
+    val bitmap = if (reuse != null && reuse.width == width && reuse.height == height) {
+        reuse
+    } else {
+        ImageBitmap(width, height)
+    }
+    val canvas = Canvas(bitmap)
+    canvas.drawRect(
+        Rect(0f, 0f, width.toFloat(), height.toFloat()),
+        Paint().apply { blendMode = BlendMode.Clear },
+    )
+    CanvasDrawScope().draw(
+        density = density,
+        layoutDirection = direction,
+        canvas = canvas,
+        size = Size(width.toFloat(), height.toFloat()),
+    ) {
+        val strength = color.alpha.coerceIn(0.45f, 1f)
+        clipPath(path) {
+            val count = 16
+            val distance = radiusPx * 0.85f
+            for (index in 0 until count) {
+                val angle = (Math.PI * 2.0 * index / count).toFloat()
+                drawText(
+                    textLayoutResult = layout,
+                    topLeft = Offset(cos(angle) * distance, sin(angle) * distance),
+                    alpha = 0.2f * strength,
+                )
+            }
         }
     }
+    return bitmap
 }
 
 private fun expandedHiddenPath(layout: TextLayoutResult, marks: List<TextMark>, outset: Float): Path? {
