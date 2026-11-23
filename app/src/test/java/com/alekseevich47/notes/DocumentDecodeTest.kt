@@ -6,6 +6,7 @@ import com.alekseevich47.notes.domain.NoteDocuments
 import com.alekseevich47.notes.domain.TextMark
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -74,5 +75,36 @@ class DocumentDecodeTest {
         assertFalse(back.unreadable)
         assertEquals("abcde", back.document.text)
         assertEquals(5, back.document.marks.size)
+    }
+
+    @Test
+    fun missingUrlDecodesAsNullAndLeavesAnOldNoteClean() {
+        val raw = """{"text":"abcd","marks":[{"start":0,"end":4,"style":"BOLD"}]}"""
+        val decoded = NoteDocuments.decode(raw)
+        assertEquals(TextMark(0, 4, MarkStyle.BOLD), decoded.marks.single())
+        assertNull(decoded.marks.single().url)
+        assertTrue(NoteDocuments.sameStored("title", raw, null, "title", decoded, null))
+        assertFalse(NoteDocuments.encode(decoded).contains("\"url\""))
+    }
+
+    @Test
+    fun monoAndLinkRoundTripAndANullUrlStaysNull() {
+        val encoded = NoteDocuments.encode(
+            NoteDocument(
+                text = "ab",
+                marks = listOf(
+                    TextMark(0, 1, MarkStyle.MONO),
+                    TextMark(1, 2, MarkStyle.LINK, "https://example.com"),
+                ),
+            ),
+        )
+        assertTrue(encoded.contains("\"MONO\""))
+        assertTrue(encoded.contains("\"LINK\""))
+        assertTrue(encoded.contains("https://example.com"))
+        val back = NoteDocuments.decode(encoded)
+        assertNull(back.marks[0].url)
+        assertEquals("https://example.com", back.marks[1].url)
+        val explicitNull = """{"text":"ab","marks":[{"start":0,"end":2,"style":"MONO","url":null}]}"""
+        assertNull(NoteDocuments.decode(explicitNull).marks.single().url)
     }
 }

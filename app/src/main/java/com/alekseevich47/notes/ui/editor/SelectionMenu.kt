@@ -86,6 +86,8 @@ fun SelectionActionsPopup(
     onItalic: () -> Unit,
     onStrike: () -> Unit,
     onUnderline: () -> Unit,
+    onMono: () -> Unit,
+    onLink: () -> Unit,
     onPlain: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -163,6 +165,8 @@ fun SelectionActionsPopup(
                         onItalic = onItalic,
                         onStrike = onStrike,
                         onUnderline = onUnderline,
+                        onMono = onMono,
+                        onLink = onLink,
                         onPlain = onPlain,
                         onBack = onBack,
                     )
@@ -345,6 +349,8 @@ private fun OverflowMenu(
     onItalic: () -> Unit,
     onStrike: () -> Unit,
     onUnderline: () -> Unit,
+    onMono: () -> Unit,
+    onLink: () -> Unit,
     onPlain: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -362,6 +368,8 @@ private fun OverflowMenu(
         OverflowLabel("Курсив", checked = MarkStyle.ITALIC in activeStyles, onClick = onItalic)
         OverflowLabel("Зачёркнутый", checked = MarkStyle.STRIKE in activeStyles, onClick = onStrike)
         OverflowLabel("Подчёркнутый", checked = MarkStyle.UNDERLINE in activeStyles, onClick = onUnderline)
+        OverflowLabel("Моно", checked = MarkStyle.MONO in activeStyles, onClick = onMono)
+        OverflowLabel("Ссылка", checked = MarkStyle.LINK in activeStyles, onClick = onLink)
         OverflowLabel("Скрытый", checked = MarkStyle.HIDDEN in activeStyles, onClick = onHidden)
         OverflowLabel("Обычный", onClick = onPlain)
         Box(

@@ -1,9 +1,12 @@
 package com.alekseevich47.notes.domain
 
 import androidx.compose.runtime.Immutable
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.nullable
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.descriptors.element
@@ -20,17 +23,19 @@ enum class MicPhase { IDLE, RECORDING, PROCESSING, DONE }
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
-enum class MarkStyle { BOLD, ITALIC, STRIKE, UNDERLINE, HIDDEN }
+enum class MarkStyle { BOLD, ITALIC, STRIKE, UNDERLINE, HIDDEN, MONO, LINK }
 
 /**
  * Unknown style names deserialize as null and are dropped from the mark list.
  * Known names still encode as the enum constant so existing files stay valid.
  */
+@OptIn(ExperimentalSerializationApi::class)
 internal object TolerantTextMarkSerializer : KSerializer<TextMark?> {
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("TextMark") {
         element<Int>("start")
         element<Int>("end")
         element<String>("style")
+        element<String?>("url", isOptional = true)
     }
 
     override fun serialize(encoder: Encoder, value: TextMark?) {
@@ -39,6 +44,8 @@ internal object TolerantTextMarkSerializer : KSerializer<TextMark?> {
             encodeIntElement(descriptor, 0, mark.start)
             encodeIntElement(descriptor, 1, mark.end)
             encodeStringElement(descriptor, 2, mark.style.name)
+            val url = mark.url
+            if (!url.isNullOrEmpty()) encodeStringElement(descriptor, 3, url)
         }
     }
 
@@ -46,19 +53,21 @@ internal object TolerantTextMarkSerializer : KSerializer<TextMark?> {
         var start = 0
         var end = 0
         var style: MarkStyle? = null
+        var url: String? = null
         decoder.decodeStructure(descriptor) {
             while (true) {
                 when (val index = decodeElementIndex(descriptor)) {
                     0 -> start = decodeIntElement(descriptor, 0)
                     1 -> end = decodeIntElement(descriptor, 1)
                     2 -> style = markStyleOrNull(decodeStringElement(descriptor, 2))
+                    3 -> url = decodeNullableSerializableElement(descriptor, 3, String.serializer().nullable)
                     CompositeDecoder.DECODE_DONE -> break
                     else -> break
                 }
             }
         }
         val resolved = style ?: return null
-        return TextMark(start, end, resolved)
+        return TextMark(start, end, resolved, url)
     }
 }
 
@@ -85,6 +94,7 @@ data class TextMark(
     val start: Int,
     val end: Int,
     val style: MarkStyle,
+    val url: String? = null,
 )
 
 /**
@@ -1157,10 +1167,32 @@ object MarkEdits {
                     }
                 }
             }
+        } else if (style == MarkStyle.LINK) {
+            marks
         } else {
             marks + TextMark(selStart, selEnd, style)
         }
         return merge(next)
+    }
+
+    /**
+     * Replaces link marks on [start, end) with [url]. A rejected url leaves the
+     * marks untouched, so a link is never stored without a safe scheme.
+     */
+    fun applyLink(marks: List<TextMark>, start: Int, end: Int, url: String): List<TextMark> {
+        if (end <= start || !isSafeLink(url)) return marks
+        val stored = url.trim()
+        val without = marks.flatMap { mark ->
+            if (mark.style != MarkStyle.LINK || mark.end <= start || mark.start >= end) {
+                listOf(mark)
+            } else {
+                buildList {
+                    if (mark.start < start) add(mark.copy(end = start))
+                    if (mark.end > end) add(mark.copy(start = end))
+                }
+            }
+        }
+        return merge(without + TextMark(start, end, MarkStyle.LINK, stored))
     }
 
     /**
@@ -1186,6 +1218,8 @@ object MarkEdits {
      * Styles a just-typed insert. [pendingOn] covers only [insStart, insEnd).
      * [pendingOff] splits an existing mark of that style around the insert.
      * [MarkStyle.HIDDEN] is ignored: hidden text is created from a selection.
+     * [MarkStyle.LINK] is not invented here: a link needs a url from [applyLink].
+     * Splitting an existing link still keeps its url.
      */
     fun applyTyping(
         marks: List<TextMark>,
@@ -1196,7 +1230,7 @@ object MarkEdits {
     ): List<TextMark> {
         if (insEnd <= insStart) return marks
         val off = pendingOff - MarkStyle.HIDDEN
-        val on = (pendingOn - MarkStyle.HIDDEN) - off
+        val on = (pendingOn - MarkStyle.HIDDEN - MarkStyle.LINK) - off
         if (off.isEmpty() && on.isEmpty()) return marks
         val cut = if (off.isEmpty()) {
             marks
@@ -1216,7 +1250,7 @@ object MarkEdits {
         return merge(cut + added)
     }
 
-    /** Adds [extra] and joins spans of the same style that touch. */
+    /** Adds [extra] and joins spans of the same style and url that touch. */
     fun include(marks: List<TextMark>, extra: List<TextMark>): List<TextMark> {
         if (extra.isEmpty()) return marks
         return merge(marks + extra)
@@ -1225,7 +1259,7 @@ object MarkEdits {
     private fun merge(marks: List<TextMark>): List<TextMark> {
         return marks
             .filter { it.end > it.start }
-            .groupBy { it.style }
+            .groupBy { it.style to it.url }
             .flatMap { (_, group) ->
                 val sorted = group.sortedBy { it.start }
                 val merged = mutableListOf<TextMark>()

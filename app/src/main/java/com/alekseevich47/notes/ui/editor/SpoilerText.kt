@@ -35,6 +35,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -233,6 +234,8 @@ internal fun spoilerAnnotated(text: String, marks: List<TextMark>, ink: Color): 
                 MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
                 MarkStyle.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
                 MarkStyle.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
+                MarkStyle.MONO -> SpanStyle(fontFamily = FontFamily.Monospace)
+                MarkStyle.LINK -> SpanStyle(textDecoration = TextDecoration.Underline)
                 MarkStyle.HIDDEN -> return@forEach
             }
             addStyle(paint, start, end)

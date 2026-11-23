@@ -3,6 +3,7 @@ package com.alekseevich47.notes.ui.components
 import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,12 +29,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.alekseevich47.notes.domain.NoteTables
+import com.alekseevich47.notes.domain.isSafeLink
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
 
@@ -254,6 +257,92 @@ fun TableSizeDialog(
                 Text(
                     "Вставить",
                     modifier = Modifier.clickable { onCreate(rows, cols) }.padding(12.dp),
+                    fontFamily = NotesFont,
+                    fontWeight = FontWeight.SemiBold,
+                    color = NotesPurple,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun LinkDialog(
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var value by remember { mutableStateOf(initial) }
+    var rejected by remember { mutableStateOf(false) }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 28.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(22.dp),
+        ) {
+            Text("Ссылка", style = MaterialTheme.typography.titleLarge, fontFamily = NotesFont)
+            Spacer(Modifier.height(12.dp))
+            BasicTextField(
+                value = value,
+                onValueChange = {
+                    value = it
+                    rejected = false
+                },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = NotesFont,
+                ),
+                cursorBrush = SolidColor(NotesPurple),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                decorationBox = { inner ->
+                    Box {
+                        if (value.isEmpty()) {
+                            Text(
+                                "https://",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontFamily = NotesFont,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+            if (rejected) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Можно только http, https, mailto и tel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Отмена",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    fontFamily = NotesFont,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Готово",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable {
+                            val trimmed = value.trim()
+                            if (isSafeLink(trimmed)) onConfirm(trimmed) else rejected = true
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     fontFamily = NotesFont,
                     fontWeight = FontWeight.SemiBold,
                     color = NotesPurple,

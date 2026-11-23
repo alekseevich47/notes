@@ -80,6 +80,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.OffsetMapping
@@ -96,6 +97,7 @@ import com.alekseevich47.notes.domain.NoteTable
 import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.ui.theme.NotesFont
+import com.alekseevich47.notes.ui.components.LinkDialog
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -188,6 +190,7 @@ internal fun RichNoteEditor(
     var textCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var menuOverflow by remember { mutableStateOf(false) }
     var menuVisible by remember { mutableStateOf(false) }
+    var linkDraft by remember { mutableStateOf<TextRange?>(null) }
     var blockMenu by remember { mutableStateOf(false) }
     val prompt = remember { HiddenPromptGuard() }
     val clipboard = LocalClipboardManager.current
@@ -623,6 +626,7 @@ internal fun RichNoteEditor(
                     val ready = layout
                     if (ready != null) scheduleReveal(ready)
                 }
+                val monoPlate = MaterialTheme.colorScheme.surfaceVariant
                 BasicTextField(
                     value = field,
                     readOnly = readOnly,
@@ -659,15 +663,26 @@ internal fun RichNoteEditor(
                             }
                             onFocused(it.isFocused)
                         }
-                        .then(spoilerModifier),
+                        .then(spoilerModifier)
+                        .followLinkTaps(
+                            marks = marks,
+                            menuVisible = menuVisible,
+                            layout = layout,
+                            hiddenUnlocked = hiddenUnlocked,
+                        ),
                     textStyle = bodyStyle,
                     cursorBrush = SolidColor(NotesPurple),
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Sentences,
                         autoCorrectEnabled = true,
                     ),
-                    visualTransformation = remember(marks, spoiler.glyphsHidden) {
-                        NoteVisual(marks, unlocked = !spoiler.glyphsHidden)
+                    visualTransformation = remember(marks, spoiler.glyphsHidden, monoPlate) {
+                        NoteVisual(
+                            marks,
+                            unlocked = !spoiler.glyphsHidden,
+                            monoPlate = monoPlate,
+                            linkInk = NotesPurple,
+                        )
                     },
                     decorationBox = { inner ->
                         Box(Modifier.fillMaxWidth()) {
@@ -710,11 +725,36 @@ internal fun RichNoteEditor(
                         onItalic = { applyMark(MarkStyle.ITALIC) },
                         onStrike = { applyMark(MarkStyle.STRIKE) },
                         onUnderline = { applyMark(MarkStyle.UNDERLINE) },
+                        onMono = { applyMark(MarkStyle.MONO) },
+                        onLink = {
+                            val start = field.selection.min
+                            val end = field.selection.max
+                            if (start != end) linkDraft = TextRange(start, end)
+                        },
                         onPlain = { clearStyles() },
                     )
                 }
             }
         }
+    }
+    val draft = linkDraft
+    if (draft != null) {
+        LinkDialog(
+            initial = coveringLinkUrl(marks, draft.min, draft.max),
+            onConfirm = { url ->
+                val caret = field.selection.end
+                onDocument(
+                    text,
+                    MarkEdits.applyLink(marks, draft.min, draft.max, url),
+                    EditKind.STRUCTURE,
+                    caret,
+                    caret,
+                )
+                linkDraft = null
+                hideMenu()
+            },
+            onDismiss = { linkDraft = null },
+        )
     }
     }
 }
@@ -863,32 +903,40 @@ private fun lineNumbered(text: String, cursor: Int): Boolean {
 private class NoteVisual(
     private val marks: List<TextMark>,
     private val unlocked: Boolean,
+    private val monoPlate: Color,
+    private val linkInk: Color,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val styled = buildAnnotatedString {
             append(text.text)
             marks.forEach { mark ->
+                if (mark.style == MarkStyle.HIDDEN) return@forEach
                 val start = mark.start.coerceIn(0, length)
                 val end = mark.end.coerceIn(0, length)
                 if (end <= start) return@forEach
-                val style = styleFor(mark.style, unlocked) ?: return@forEach
-                addStyle(style, start, end)
+                addStyle(styleFor(mark.style, monoPlate, linkInk), start, end)
+            }
+            if (!unlocked) {
+                marks.forEach { mark ->
+                    if (mark.style != MarkStyle.HIDDEN) return@forEach
+                    val start = mark.start.coerceIn(0, length)
+                    val end = mark.end.coerceIn(0, length)
+                    if (end > start) addStyle(SpanStyle(color = Color.Transparent), start, end)
+                }
             }
         }
         return TransformedText(styled, OffsetMapping.Identity)
     }
 }
 
-private fun styleFor(style: MarkStyle, unlocked: Boolean): SpanStyle? = when (style) {
+private fun styleFor(style: MarkStyle, monoPlate: Color, linkInk: Color): SpanStyle = when (style) {
     MarkStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
     MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
     MarkStyle.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
     MarkStyle.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
-    MarkStyle.HIDDEN -> if (unlocked) {
-        null
-    } else {
-        SpanStyle(color = Color.Transparent)
-    }
+    MarkStyle.MONO -> SpanStyle(fontFamily = FontFamily.Monospace, background = monoPlate)
+    MarkStyle.LINK -> SpanStyle(color = linkInk, textDecoration = TextDecoration.Underline)
+    MarkStyle.HIDDEN -> SpanStyle(color = Color.Transparent)
 }
 
 

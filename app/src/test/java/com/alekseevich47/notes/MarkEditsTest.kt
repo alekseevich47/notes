@@ -4,6 +4,7 @@ import com.alekseevich47.notes.domain.MarkEdits
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.TextMark
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkEditsTest {
@@ -122,5 +123,36 @@ class MarkEditsTest {
         assertEquals(6, mark.start)
         assertEquals(9, mark.end)
         assertEquals("bol", after.substring(mark.start, mark.end))
+    }
+
+    @Test
+    fun copiesKeepTheLinkUrl() {
+        val link = TextMark(0, 8, MarkStyle.LINK, "https://example.com")
+        val shifted = MarkEdits.shift(listOf(link), "abcdefgh", "abXcdefgh").single()
+        assertEquals("https://example.com", shifted.url)
+        val cleared = MarkEdits.clear(listOf(link), 2, 4)
+        assertEquals(listOf("https://example.com", "https://example.com"), cleared.map { it.url })
+        val toggled = MarkEdits.toggle(listOf(link), MarkStyle.LINK, 2, 4)
+        assertEquals(listOf("https://example.com", "https://example.com"), toggled.map { it.url })
+        val typed = MarkEdits.applyTyping(
+            listOf(link),
+            insStart = 1,
+            insEnd = 2,
+            pendingOn = setOf(MarkStyle.LINK),
+            pendingOff = setOf(MarkStyle.LINK),
+        )
+        assertTrue(typed.isNotEmpty())
+        assertTrue(typed.all { it.url == "https://example.com" })
+        assertTrue(typed.none { it.style == MarkStyle.LINK && it.url == null })
+    }
+
+    @Test
+    fun rejectedUrlDoesNotCreateALink() {
+        val before = listOf(TextMark(0, 4, MarkStyle.BOLD))
+        assertEquals(before, MarkEdits.applyLink(before, 0, 4, "javascript:alert(1)"))
+        assertEquals(before, MarkEdits.applyLink(before, 0, 4, ""))
+        assertEquals(before, MarkEdits.applyLink(before, 0, 4, "file:///tmp/a"))
+        val linked = MarkEdits.applyLink(before, 0, 4, " https://example.com ")
+        assertEquals(TextMark(0, 4, MarkStyle.LINK, "https://example.com"), linked.last())
     }
 }

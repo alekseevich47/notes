@@ -87,6 +87,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -106,6 +107,7 @@ import com.alekseevich47.notes.domain.NoteTable
 import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.ui.theme.NotesFont
+import com.alekseevich47.notes.ui.components.LinkDialog
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -783,6 +785,7 @@ private fun TableCellEditor(
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var menuVisible by remember { mutableStateOf(false) }
     var menuOverflow by remember { mutableStateOf(false) }
+    var linkDraft by remember { mutableStateOf<TextRange?>(null) }
     val clipboard = LocalClipboardManager.current
     val platformClipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
     val platformToolbar = LocalTextToolbar.current
@@ -925,6 +928,7 @@ private fun TableCellEditor(
             .padding(horizontal = 8.dp, vertical = 8.dp),
         contentAlignment = cellAlignment(h, v),
     ) {
+        val monoPlate = MaterialTheme.colorScheme.surfaceVariant
         CompositionLocalProvider(LocalTextToolbar provides toolbar) {
             BasicTextField(
                 value = field,
@@ -934,15 +938,26 @@ private fun TableCellEditor(
                 modifier = Modifier
                     .fillMaxWidth()
                     .onFocusChanged { state -> onFocused(state.isFocused) }
-                    .then(spoilerModifier),
+                    .then(spoilerModifier)
+                    .followLinkTaps(
+                        marks = marks,
+                        menuVisible = menuVisible,
+                        layout = layout,
+                        hiddenUnlocked = hiddenUnlocked,
+                    ),
                 textStyle = cellStyle,
                 cursorBrush = SolidColor(NotesPurple),
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     autoCorrectEnabled = true,
                 ),
-                visualTransformation = remember(marks, spoiler.glyphsHidden) {
-                    CellVisual(marks, unlocked = !spoiler.glyphsHidden)
+                visualTransformation = remember(marks, spoiler.glyphsHidden, monoPlate) {
+                    CellVisual(
+                        marks,
+                        unlocked = !spoiler.glyphsHidden,
+                        monoPlate = monoPlate,
+                        linkInk = NotesPurple,
+                    )
                 },
             )
         }
@@ -1009,6 +1024,12 @@ private fun TableCellEditor(
                     onItalic = { apply(MarkStyle.ITALIC) },
                     onStrike = { apply(MarkStyle.STRIKE) },
                     onUnderline = { apply(MarkStyle.UNDERLINE) },
+                    onMono = { apply(MarkStyle.MONO) },
+                    onLink = {
+                        val start = field.selection.min
+                        val end = field.selection.max
+                        if (start != end) linkDraft = TextRange(start, end)
+                    },
                     onPlain = {
                         val a = field.selection.min
                         val b = field.selection.max
@@ -1021,6 +1042,25 @@ private fun TableCellEditor(
                     },
                 )
             }
+        }
+        val draft = linkDraft
+        if (draft != null) {
+            LinkDialog(
+                initial = coveringLinkUrl(marks, draft.min, draft.max),
+                onConfirm = { url ->
+                    onChange(
+                        NoteTables.withCellMarks(
+                            table,
+                            row,
+                            col,
+                            MarkEdits.applyLink(marks, draft.min, draft.max, url),
+                        ),
+                    )
+                    linkDraft = null
+                    menuVisible = false
+                },
+                onDismiss = { linkDraft = null },
+            )
         }
     }
 }
@@ -1076,11 +1116,17 @@ private fun cellStyles(marks: List<TextMark>, selection: TextRange): Set<MarkSty
     }.toSet()
 }
 
-private class CellVisual(private val marks: List<TextMark>, private val unlocked: Boolean) : VisualTransformation {
+private class CellVisual(
+    private val marks: List<TextMark>,
+    private val unlocked: Boolean,
+    private val monoPlate: Color,
+    private val linkInk: Color,
+) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val styled = buildAnnotatedString {
             append(text.text)
             marks.forEach { mark ->
+                if (mark.style == MarkStyle.HIDDEN) return@forEach
                 val start = mark.start.coerceIn(0, length)
                 val end = mark.end.coerceIn(0, length)
                 if (end <= start) return@forEach
@@ -1089,9 +1135,19 @@ private class CellVisual(private val marks: List<TextMark>, private val unlocked
                     MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
                     MarkStyle.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
                     MarkStyle.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
-                    MarkStyle.HIDDEN -> if (unlocked) null else SpanStyle(color = Color.Transparent)
+                    MarkStyle.MONO -> SpanStyle(fontFamily = FontFamily.Monospace, background = monoPlate)
+                    MarkStyle.LINK -> SpanStyle(color = linkInk, textDecoration = TextDecoration.Underline)
+                    MarkStyle.HIDDEN -> return@forEach
                 }
-                if (style != null) addStyle(style, start, end)
+                addStyle(style, start, end)
+            }
+            if (!unlocked) {
+                marks.forEach { mark ->
+                    if (mark.style != MarkStyle.HIDDEN) return@forEach
+                    val start = mark.start.coerceIn(0, length)
+                    val end = mark.end.coerceIn(0, length)
+                    if (end > start) addStyle(SpanStyle(color = Color.Transparent), start, end)
+                }
             }
         }
         return TransformedText(styled, OffsetMapping.Identity)

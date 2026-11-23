@@ -55,4 +55,16 @@ class RichClipTest {
         assertNull(textInsertion("hello!", "hello"))
         assertNull(textInsertion("same", "same"))
     }
+
+    @Test
+    fun clipRoundTripsTheUrl() {
+        val link = TextMark(1, 6, MarkStyle.LINK, "mailto:a@b.c")
+        val clipped = RichClip.clip(listOf(link), 2, 5)
+        assertEquals("mailto:a@b.c", clipped.single().url)
+        RichClip.put("cde", clipped)
+        val matched = RichClip.match("cde")
+        assertEquals("mailto:a@b.c", matched?.single()?.url)
+        val overlaid = RichClip.overlay(emptyList(), 3, matched!!)
+        assertEquals(TextMark(3, 6, MarkStyle.LINK, "mailto:a@b.c"), overlaid.single())
+    }
 }
