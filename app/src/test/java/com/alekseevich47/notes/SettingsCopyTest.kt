@@ -1,8 +1,10 @@
 package com.alekseevich47.notes
 
+import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.service.WarmupNotice
 import com.alekseevich47.notes.ui.settings.SettingsCopy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -37,15 +39,19 @@ class SettingsCopyTest {
         assertEquals("Автозагрузка моделей", SettingsCopy.WARMUP_TITLE)
         assertEquals("на этом устройстве недоступно", SettingsCopy.WARMUP_UNAVAILABLE)
         val subtitle = SettingsCopy.WARMUP_SUBTITLE
-        assertTrue(subtitle.contains("Tecno"))
-        assertTrue(subtitle.contains("Xiaomi"))
-        assertTrue(subtitle.contains("Samsung"))
+        assertTrue(subtitle.contains("мгновенно"))
         assertTrue(subtitle.contains("автозапуск"))
-        assertTrue(subtitle.contains("батаре"))
-        assertTrue(subtitle.contains("разблокир"))
+        assertTrue(subtitle.contains("ограничения батареи"))
+        assertTrue(subtitle.contains("обратитесь в поддержку"))
+        assertFalse(subtitle.contains("  "))
         assertEquals("Распознавание", SettingsCopy.RECOGNIZER_TITLE)
+        assertEquals(
+            "Не на всех смартфонах корректно работает \"системное распознавание\". Рекомендуем использовать T-one, предварительно скачав его по кнопке ниже.",
+            SettingsCopy.RECOGNIZER_HINT,
+        )
         assertEquals("T-one", SettingsCopy.RECOGNIZER_TONE)
         assertEquals("Системное", SettingsCopy.RECOGNIZER_SYSTEM)
+        assertEquals("Финальная обработка текста.", ModelKind.GIGA_AM.detail)
         assertEquals("Заметки готовы к записи", WarmupNotice.TEXT)
     }
 

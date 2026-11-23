@@ -97,7 +97,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .weight(1f)
                     .then(
-                        if (warmup && warmupAvailable) {
+                        if (warmupAvailable) {
                             Modifier.clickable(onClick = viewModel::openWarmupPowerSettings)
                         } else {
                             Modifier
@@ -116,7 +116,7 @@ fun SettingsScreen(
         Text(
             if (warmupAvailable) SettingsCopy.WARMUP_SUBTITLE else SettingsCopy.WARMUP_UNAVAILABLE,
             modifier = Modifier.then(
-                if (warmup && warmupAvailable) {
+                if (warmupAvailable) {
                     Modifier.clickable(onClick = viewModel::openWarmupPowerSettings)
                 } else {
                     Modifier
@@ -128,6 +128,13 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(22.dp))
         SectionLabel(SettingsCopy.RECOGNIZER_TITLE)
+        Text(
+            SettingsCopy.RECOGNIZER_HINT,
+            modifier = Modifier.padding(bottom = 8.dp),
+            fontFamily = NotesFont,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ThemeChip(SettingsCopy.RECOGNIZER_TONE, recognizer == NotesPrefs.RECOGNIZER_TONE) {
                 viewModel.setRecognizer(NotesPrefs.RECOGNIZER_TONE)

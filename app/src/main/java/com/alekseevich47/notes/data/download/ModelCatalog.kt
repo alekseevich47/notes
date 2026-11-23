@@ -9,7 +9,7 @@ enum class ModelKind(val folder: String, val title: String, val detail: String) 
     GIGA_AM(
         folder = "gigaam",
         title = "GigaAM v3",
-        detail = "Финал: пунктуация, регистр и цифры",
+        detail = "Финальная обработка текста.",
     ),
 }
 
