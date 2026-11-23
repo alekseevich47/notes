@@ -878,18 +878,16 @@ private fun TableCellEditor(
         color = ink,
         textAlign = textAlign(h),
     )
-    val cellLocked = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }
-    val spoilerModifier = if (cellLocked) {
-        lockedSpoilerModifier(
-            text = field.text,
-            marks = marks,
-            style = cellStyle,
-            ink = ink,
-            widthPx = layout?.size?.width ?: 0,
-        )
-    } else {
-        Modifier
-    }
+    val spoiler = rememberSpoilerLayer(
+        text = field.text,
+        marks = marks,
+        style = cellStyle,
+        ink = ink,
+        layout = layout,
+        widthPx = layout?.size?.width ?: 0,
+        hiddenUnlocked = hiddenUnlocked,
+    )
+    val spoilerModifier = spoiler.modifier
     val pad = with(LocalDensity.current) { 8.dp.toPx() }
     val layoutState = androidx.compose.runtime.rememberUpdatedState(layout)
     Box(
@@ -943,8 +941,8 @@ private fun TableCellEditor(
                     capitalization = KeyboardCapitalization.Sentences,
                     autoCorrectEnabled = true,
                 ),
-                visualTransformation = remember(marks, hiddenUnlocked) {
-                    CellVisual(marks, hiddenUnlocked)
+                visualTransformation = remember(marks, spoiler.glyphsHidden) {
+                    CellVisual(marks, unlocked = !spoiler.glyphsHidden)
                 },
             )
         }

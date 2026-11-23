@@ -196,21 +196,20 @@ internal fun RichNoteEditor(
     lateinit var applyIncoming: (TextFieldValue) -> Unit
     val toolbar = remember { RoutingTextToolbar(platformToolbar) }
     val ink = MaterialTheme.colorScheme.onSurface
-    val censor = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }
-    val spoilerModifier = if (censor) {
-        lockedSpoilerModifier(
-            text = field.text,
-            marks = marks,
-            style = MaterialTheme.typography.bodyLarge.copy(
-                color = ink,
-                fontFamily = NotesFont,
-            ),
-            ink = ink,
-            widthPx = layout?.size?.width ?: 0,
-        )
-    } else {
-        Modifier
-    }
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
+        color = ink,
+        fontFamily = NotesFont,
+    )
+    val spoiler = rememberSpoilerLayer(
+        text = field.text,
+        marks = marks,
+        style = bodyStyle,
+        ink = ink,
+        layout = layout,
+        widthPx = layout?.size?.width ?: 0,
+        hiddenUnlocked = hiddenUnlocked,
+    )
+    val spoilerModifier = spoiler.modifier
     if (field.selection.collapsed && (menuOverflow || menuVisible)) {
         menuOverflow = false
         menuVisible = false
@@ -661,17 +660,14 @@ internal fun RichNoteEditor(
                             onFocused(it.isFocused)
                         }
                         .then(spoilerModifier),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontFamily = NotesFont,
-                    ),
+                    textStyle = bodyStyle,
                     cursorBrush = SolidColor(NotesPurple),
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Sentences,
                         autoCorrectEnabled = true,
                     ),
-                    visualTransformation = remember(marks, hiddenUnlocked) {
-                        NoteVisual(marks, hiddenUnlocked)
+                    visualTransformation = remember(marks, spoiler.glyphsHidden) {
+                        NoteVisual(marks, unlocked = !spoiler.glyphsHidden)
                     },
                     decorationBox = { inner ->
                         Box(Modifier.fillMaxWidth()) {

@@ -409,7 +409,12 @@ private fun renderSmear(
     return bitmap
 }
 
-private fun expandedHiddenPath(layout: TextLayoutResult, marks: List<TextMark>, outset: Float): Path? {
+internal fun expandedHiddenPath(
+    layout: TextLayoutResult,
+    marks: List<TextMark>,
+    outset: Float,
+    rectsOut: MutableList<Rect>? = null,
+): Path? {
     val textLength = layout.layoutInput.text.length
     if (textLength == 0) return null
     val path = Path()
@@ -433,14 +438,14 @@ private fun expandedHiddenPath(layout: TextLayoutResult, marks: List<TextMark>, 
             val top = layout.getLineTop(line)
             val bottom = layout.getLineBottom(line)
             if (bottom - top < 0.5f) continue
-            path.addRect(
-                Rect(
-                    barLeft - outset,
-                    top - outset * 0.35f,
-                    barRight + outset,
-                    bottom + outset * 0.35f,
-                ),
+            val rect = Rect(
+                barLeft - outset,
+                top - outset * 0.35f,
+                barRight + outset,
+                bottom + outset * 0.35f,
             )
+            path.addRect(rect)
+            rectsOut?.add(rect)
             any = true
         }
     }
