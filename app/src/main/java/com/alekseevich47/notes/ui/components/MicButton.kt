@@ -1,6 +1,7 @@
 package com.alekseevich47.notes.ui.components
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -21,12 +22,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.alekseevich47.notes.ui.theme.LocalPerfTier
+import com.alekseevich47.notes.ui.theme.LocalReduceMotion
+import com.alekseevich47.notes.ui.theme.PerfTier
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -76,6 +89,9 @@ private val RecordingColors = blendStops(
     stepsBetween = 3,
 )
 
+/** One slow idle cycle. 0 and 1 land on the same sine sample, so the join is invisible. */
+private const val IdleWaveMillis = 5_000
+
 @Composable
 fun MicButton(
     phase: MicPhase,
@@ -83,31 +99,8 @@ fun MicButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val transition = rememberInfiniteTransition(label = "mic")
-    // 0 and 1 are the same angle of sin(2π t), so the restart is invisible.
-    val wave by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Restart),
-        label = "wave",
-    )
-    val colorShift by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(8400, easing = LinearEasing), RepeatMode.Restart),
-        label = "colors",
-    )
-    val bounce by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Restart),
-        label = "dots",
-    )
-    val easedLevel by animateFloatAsState(
-        targetValue = level().coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
-        label = "level",
-    )
+    // Own composable so a meter tick does not rebuild the cached glyph.
+    val easedLevel = smoothedLevel(level)
     val plate = MaterialTheme.colorScheme.surface
     val ink = MaterialTheme.colorScheme.onSurface
     val idleInk = MaterialTheme.colorScheme.onSurfaceVariant
@@ -126,11 +119,15 @@ fun MicButton(
         contentAlignment = Alignment.Center,
     ) {
         if (phase == MicPhase.RECORDING) {
-            Canvas(Modifier.matchParentSize()) {
+            Canvas(
+                Modifier
+                    .matchParentSize()
+                    .graphicsLayer(),
+            ) {
                 // Snapshot read: StateFlow.value alone would not invalidate this draw.
                 val meter = level().coerceIn(0f, 1f)
                 drawCircle(
-                    color = NotesPurple.copy(alpha = 0.16f + smoothedMeter(easedLevel, meter) * 0.26f),
+                    color = NotesPurple.copy(alpha = 0.16f + smoothedMeter(easedLevel.value, meter) * 0.26f),
                     radius = size.minDimension / 2f,
                 )
             }
@@ -140,56 +137,174 @@ fun MicButton(
             transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
             label = "mic-phase",
         ) { target ->
-            Canvas(Modifier.size(64.dp)) {
-                val glyph = outlineMic(size)
-                when (target) {
-                    MicPhase.IDLE -> {
-                        clipPath(glyph.inner) {
-                            drawIdleWave(glyph.body, wave)
-                        }
-                        drawOutlineMic(glyph, idleInk)
-                    }
-                    MicPhase.RECORDING -> {
-                        val shown = smoothedMeter(easedLevel, level().coerceIn(0f, 1f))
-                        clipPath(glyph.inner) {
-                            drawRecordingFill(glyph.body, shown, colorShift, wave)
-                        }
-                        drawOutlineMic(glyph, ink)
-                    }
-                    MicPhase.PROCESSING -> {
-                        // About 1.9× the old 4.2px discs, spaced so the discs do not meet.
-                        val dotRadius = 8f
-                        val dotSpread = 22f
-                        val centers = listOf(
-                            size.width / 2f - dotSpread,
-                            size.width / 2f,
-                            size.width / 2f + dotSpread,
-                        )
-                        centers.forEachIndexed { index, x ->
-                            val phaseShift = (bounce + index * 0.18f) % 1f
-                            val lift = sin(phaseShift * PI).toFloat() * 8f
-                            drawCircle(
-                                color = NotesPurple,
-                                radius = dotRadius,
-                                center = Offset(x, size.height / 2f - lift),
-                            )
-                        }
-                    }
-                    MicPhase.DONE -> {
-                        val cx = size.width / 2f
-                        val h = size.height
-                        drawCircle(color = Color(0xFF2F9E44), style = Stroke(width = 3f), radius = size.width * 0.28f)
-                        val check = Path().apply {
-                            moveTo(cx - 10f, h / 2f)
-                            lineTo(cx - 2f, h / 2f + 8f)
-                            lineTo(cx + 12f, h / 2f - 8f)
-                        }
-                        drawPath(check, color = Color(0xFF2F9E44), style = Stroke(width = 3.4f, cap = StrokeCap.Round))
-                    }
-                }
+            when (target) {
+                MicPhase.IDLE -> IdleMic(idleInk)
+                MicPhase.RECORDING -> RecordingMic(ink, easedLevel, level)
+                MicPhase.PROCESSING -> ProcessingMic()
+                MicPhase.DONE -> DoneMic()
             }
         }
     }
+}
+
+@Composable
+private fun smoothedLevel(level: () -> Float): State<Float> {
+    return animateFloatAsState(
+        targetValue = level().coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+        label = "level",
+    )
+}
+
+/**
+ * Static when the device is weak, motion is reduced, or the screen is not
+ * resumed. Otherwise one slow phase, and nothing else is on the clock.
+ */
+@Composable
+private fun IdleMic(ink: Color) {
+    val resumed = rememberResumed()
+    val live = LocalPerfTier.current == PerfTier.NORMAL && !LocalReduceMotion.current && resumed
+    val turns = remember { Animatable(0f) }
+    LaunchedEffect(live) {
+        if (!live) {
+            turns.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (isActive) {
+            turns.snapTo(0f)
+            turns.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = IdleWaveMillis, easing = LinearEasing),
+            )
+        }
+    }
+    val wave = remember { Path() }
+    Box(
+        Modifier
+            .size(64.dp)
+            .then(if (live) Modifier.graphicsLayer() else Modifier)
+            .drawWithCache {
+                val glyph = outlineMic(size)
+                onDrawBehind {
+                    val phase = if (live) turns.value else 0f
+                    clipPath(glyph.inner) {
+                        drawIdleWave(glyph.body, phase, wave)
+                    }
+                    drawOutlineMic(glyph, ink)
+                }
+            },
+    )
+}
+
+@Composable
+private fun RecordingMic(ink: Color, easedLevel: State<Float>, level: () -> Float) {
+    val transition = rememberInfiniteTransition(label = "mic-recording")
+    // 0 and 1 are the same angle of sin(2π t), so the restart is invisible.
+    val wave = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Restart),
+        label = "wave",
+    )
+    val colorShift = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(8400, easing = LinearEasing), RepeatMode.Restart),
+        label = "colors",
+    )
+    val path = remember { Path() }
+    Box(
+        Modifier
+            .size(64.dp)
+            .graphicsLayer()
+            .drawWithCache {
+                val glyph = outlineMic(size)
+                onDrawBehind {
+                    val shown = smoothedMeter(easedLevel.value, level().coerceIn(0f, 1f))
+                    clipPath(glyph.inner) {
+                        drawRecordingFill(glyph.body, shown, colorShift.value, wave.value, path)
+                    }
+                    drawOutlineMic(glyph, ink)
+                }
+            },
+    )
+}
+
+@Composable
+private fun ProcessingMic() {
+    val transition = rememberInfiniteTransition(label = "mic-dots")
+    val bounce = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Restart),
+        label = "dots",
+    )
+    Box(
+        Modifier
+            .size(64.dp)
+            .graphicsLayer()
+            .drawWithCache {
+                // About 1.9× the old 4.2px discs, spaced so the discs do not meet.
+                val dotRadius = 8f
+                val dotSpread = 22f
+                val mid = size.width / 2f
+                val centers = floatArrayOf(mid - dotSpread, mid, mid + dotSpread)
+                val cy = size.height / 2f
+                onDrawBehind {
+                    val t = bounce.value
+                    for (index in centers.indices) {
+                        val phaseShift = (t + index * 0.18f) % 1f
+                        val lift = sin(phaseShift * PI).toFloat() * 8f
+                        drawCircle(
+                            color = NotesPurple,
+                            radius = dotRadius,
+                            center = Offset(centers[index], cy - lift),
+                        )
+                    }
+                }
+            },
+    )
+}
+
+@Composable
+private fun DoneMic() {
+    Box(
+        Modifier
+            .size(64.dp)
+            .drawWithCache {
+                val cx = size.width / 2f
+                val h = size.height
+                val check = Path().apply {
+                    moveTo(cx - 10f, h / 2f)
+                    lineTo(cx - 2f, h / 2f + 8f)
+                    lineTo(cx + 12f, h / 2f - 8f)
+                }
+                val radius = size.width * 0.28f
+                val ring = Stroke(width = 3f)
+                val stroke = Stroke(width = 3.4f, cap = StrokeCap.Round)
+                onDrawBehind {
+                    drawCircle(color = Color(0xFF2F9E44), style = ring, radius = radius)
+                    drawPath(check, color = Color(0xFF2F9E44), style = stroke)
+                }
+            },
+    )
+}
+
+@Composable
+private fun rememberResumed(): Boolean {
+    val owner = LocalLifecycleOwner.current
+    val resumed = remember(owner) {
+        mutableStateOf(owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { source, _ ->
+            resumed.value = source.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        }
+        owner.lifecycle.addObserver(observer)
+        resumed.value = owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    return resumed.value
 }
 
 private data class OutlineMic(
@@ -273,13 +388,13 @@ private fun DrawScope.drawOutlineMic(glyph: OutlineMic, color: Color) {
     )
 }
 
-private fun DrawScope.drawIdleWave(body: Rect, turns: Float) {
+private fun DrawScope.drawIdleWave(body: Rect, turns: Float, path: Path) {
     val height = body.height.coerceAtLeast(1f)
     // One broad hump across the head, not a steep crest and trough.
     val amp = height * 0.09f
     val base = body.bottom - height * 0.34f
     drawPath(
-        wavePath(body, base, amp, turns, cycles = 0.5f),
+        wavePath(path, body, base, amp, turns, cycles = 0.5f),
         brush = Brush.verticalGradient(
             colors = listOf(
                 NotesPurple.copy(alpha = 0.22f),
@@ -297,10 +412,10 @@ private fun DrawScope.drawIdleWave(body: Rect, turns: Float) {
  * crests stay round. `cycles` is a whole or half turn across the width.
  * `turns` is 0..1 and sin(2π t) matches at both ends, so the loop has no seam.
  */
-private fun wavePath(body: Rect, base: Float, amplitude: Float, turns: Float, cycles: Float): Path {
+private fun wavePath(path: Path, body: Rect, base: Float, amplitude: Float, turns: Float, cycles: Float): Path {
     val width = body.width.coerceAtLeast(1f)
     val segments = 12
-    val path = Path()
+    path.rewind()
     path.moveTo(body.left, body.bottom)
     path.lineTo(body.left, waveSample(0f, base, amplitude, turns, cycles))
     for (index in 0 until segments) {
@@ -333,7 +448,7 @@ private fun waveSlope(u: Float, amplitude: Float, turns: Float, cycles: Float): 
     return (cos((u * cycles + turns) * (2.0 * PI)) * (2.0 * PI) * cycles * amplitude).toFloat()
 }
 
-private fun DrawScope.drawRecordingFill(body: Rect, level: Float, shift: Float, turns: Float) {
+private fun DrawScope.drawRecordingFill(body: Rect, level: Float, shift: Float, turns: Float, path: Path) {
     val height = body.height.coerceAtLeast(1f)
     val amp = height * 0.055f
     val room = amp / height + 0.012f
@@ -342,7 +457,7 @@ private fun DrawScope.drawRecordingFill(body: Rect, level: Float, shift: Float, 
     val period = height * 1.3f
     val startY = body.top - shift * period
     drawPath(
-        wavePath(body, base, amp, turns, cycles = 1f),
+        wavePath(path, body, base, amp, turns, cycles = 1f),
         brush = Brush.verticalGradient(
             colors = RecordingColors,
             startY = startY,
