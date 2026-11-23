@@ -70,19 +70,51 @@ class SettingsViewModel @Inject constructor(
         settings.clearModelEnabled(kind)
     }
 
+    /**
+     * Set only after [verifyCurrentPin] sees [PinHasher.matches].
+     * A typo on the repeat step leaves it set; save, reset, and dismiss clear it.
+     */
+    private var pinVerified = false
+
+    fun verifyCurrentPin(pin: String): Boolean {
+        pinVerified = PinHasher.matches(pin, settings.pinHash.value)
+        if (!pinVerified) AppLog.i(TAG, "pin change rejected")
+        return pinVerified
+    }
+
+    fun clearPinVerified() {
+        pinVerified = false
+    }
+
     fun submitNewPin(first: String, second: String): PinChange {
-        if (PinHasher.isServiceReset(first) || PinHasher.isServiceReset(second)) {
-            settings.setPinHash(null)
-            AppLog.i(TAG, "pin cleared service-reset")
-            return PinChange.RESET
+        val decision = decidePinChange(
+            hasExistingPin = !settings.pinHash.value.isNullOrBlank(),
+            verified = pinVerified,
+            firstIsServiceReset = PinHasher.isServiceReset(first),
+            secondIsServiceReset = PinHasher.isServiceReset(second),
+            pinsMatch = first == second,
+        )
+        if (decision.clearVerification) pinVerified = false
+        return when (decision.result) {
+            PinChangeResult.REJECTED -> {
+                AppLog.i(TAG, "pin change rejected")
+                PinChange.REJECTED
+            }
+            PinChangeResult.RESET -> {
+                settings.setPinHash(null)
+                AppLog.i(TAG, "pin cleared service-reset")
+                PinChange.RESET
+            }
+            PinChangeResult.MISMATCH -> {
+                AppLog.i(TAG, "pin rejected mismatch")
+                PinChange.MISMATCH
+            }
+            PinChangeResult.SAVE -> {
+                settings.setPinHash(PinHasher.hash(first))
+                AppLog.i(TAG, "pin set")
+                PinChange.SAVED
+            }
         }
-        if (first != second) {
-            AppLog.i(TAG, "pin rejected mismatch")
-            return PinChange.MISMATCH
-        }
-        settings.setPinHash(PinHasher.hash(first))
-        AppLog.i(TAG, "pin set")
-        return PinChange.SAVED
     }
 
     fun clearWith(pin: String): Boolean {
@@ -100,7 +132,7 @@ class SettingsViewModel @Inject constructor(
         return false
     }
 
-    enum class PinChange { SAVED, MISMATCH, RESET }
+    enum class PinChange { SAVED, MISMATCH, RESET, REJECTED }
 
     private companion object {
         const val TAG = "Settings"

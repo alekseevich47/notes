@@ -68,6 +68,7 @@ fun SettingsScreen(
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
     var pinError by remember { mutableStateOf<String?>(null) }
+    var changeStep by remember { mutableStateOf(ChangeStep.CURRENT) }
 
     Column(
         modifier
@@ -163,7 +164,9 @@ fun SettingsScreen(
             ActionText("Сменить PIN") {
                 firstPin = null
                 pinError = null
-                pinMode = PinMode.CREATE
+                changeStep = ChangeStep.CURRENT
+                viewModel.clearPinVerified()
+                pinMode = PinMode.CHANGE
             }
             ActionText("Удалить PIN") {
                 pinError = null
@@ -215,6 +218,11 @@ fun SettingsScreen(
     if (mode != null) {
         val title = when (mode) {
             PinMode.CREATE -> if (firstPin == null) "Новый PIN" else "Повторите PIN"
+            PinMode.CHANGE -> when (changeStep) {
+                ChangeStep.CURRENT -> "Текущий PIN"
+                ChangeStep.NEW -> "Новый PIN"
+                ChangeStep.REPEAT -> "Повторите PIN"
+            }
             PinMode.CLEAR -> "Текущий PIN"
         }
         PinDialog(
@@ -242,6 +250,46 @@ fun SettingsScreen(
                                     pinMode = null
                                     onToast("PIN сброшен")
                                 }
+                                SettingsViewModel.PinChange.REJECTED -> {
+                                    pinError = "Неверный PIN"
+                                }
+                            }
+                        }
+                    }
+                    PinMode.CHANGE -> when (changeStep) {
+                        ChangeStep.CURRENT -> {
+                            if (viewModel.verifyCurrentPin(value)) {
+                                changeStep = ChangeStep.NEW
+                                pinError = null
+                            } else {
+                                pinError = "Неверный PIN"
+                            }
+                        }
+                        ChangeStep.NEW -> {
+                            firstPin = value
+                            changeStep = ChangeStep.REPEAT
+                            pinError = null
+                        }
+                        ChangeStep.REPEAT -> {
+                            when (viewModel.submitNewPin(firstPin.orEmpty(), value)) {
+                                SettingsViewModel.PinChange.SAVED -> {
+                                    pinMode = null
+                                    onToast("PIN сохранён")
+                                }
+                                SettingsViewModel.PinChange.MISMATCH -> {
+                                    firstPin = null
+                                    changeStep = ChangeStep.NEW
+                                    pinError = "Не совпало, начните снова"
+                                }
+                                SettingsViewModel.PinChange.RESET -> {
+                                    pinMode = null
+                                    onToast("PIN сброшен")
+                                }
+                                SettingsViewModel.PinChange.REJECTED -> {
+                                    firstPin = null
+                                    changeStep = ChangeStep.CURRENT
+                                    pinError = "Неверный PIN"
+                                }
                             }
                         }
                     }
@@ -255,12 +303,17 @@ fun SettingsScreen(
                     }
                 }
             },
-            onDismiss = { pinMode = null },
+            onDismiss = {
+                pinMode = null
+                viewModel.clearPinVerified()
+            },
         )
     }
 }
 
-private enum class PinMode { CREATE, CLEAR }
+private enum class PinMode { CREATE, CHANGE, CLEAR }
+
+private enum class ChangeStep { CURRENT, NEW, REPEAT }
 
 @Composable
 private fun SectionLabel(text: String) {
