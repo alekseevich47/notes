@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.ui.components
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,8 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.alekseevich47.notes.ui.theme.LocalPerfTier
+import com.alekseevich47.notes.ui.theme.PerfTier
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -86,6 +89,10 @@ fun LiquidGlassPlate(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val palette = LiquidGlassTokens.palette()
+    // Haze is the only blur, and only on a normal device that can composite it.
+    // Weak devices and API 26–30 paint a flat fill instead of two blur passes.
+    val liveBlur = LocalPerfTier.current == PerfTier.NORMAL &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     // Same light drop shadow as the sticky player. It stays outside the offscreen
     // buffer: that buffer is only as big as the plate and would clip the shadow.
     Box(modifier = modifier) {
@@ -102,7 +109,7 @@ fun LiquidGlassPlate(
                 .matchParentSize()
                 .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
         ) {
-            if (halo) {
+            if (halo && liveBlur) {
                 Box(
                     modifier = Modifier
                         .matchParentSize()
@@ -127,20 +134,28 @@ fun LiquidGlassPlate(
                     .then(if (halo) Modifier.padding(18.dp) else Modifier)
                     .clip(shape),
             ) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .hazeEffect(
-                            state = hazeState,
-                            style = HazeStyle(
-                                backgroundColor = palette.fill,
-                                tints = listOf(HazeTint(palette.fill), HazeTint(palette.tint)),
-                                blurRadius = LiquidGlassTokens.Blur,
-                                noiseFactor = 0.08f,
-                            ),
-                        )
-                        .background(palette.fill),
-                )
+                if (liveBlur) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .hazeEffect(
+                                state = hazeState,
+                                style = HazeStyle(
+                                    backgroundColor = palette.fill,
+                                    tints = listOf(HazeTint(palette.fill), HazeTint(palette.tint)),
+                                    blurRadius = LiquidGlassTokens.Blur,
+                                    noiseFactor = 0.08f,
+                                ),
+                            )
+                            .background(palette.fill),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(palette.fill.copy(alpha = 0.94f)),
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .matchParentSize()
