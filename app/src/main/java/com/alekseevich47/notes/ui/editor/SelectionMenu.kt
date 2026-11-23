@@ -4,11 +4,10 @@ import android.view.View
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -37,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -51,6 +52,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -102,6 +104,9 @@ fun SelectionActionsPopup(
     val marginPx = with(density) { MenuScreenMargin.roundToPx() }
     val shadowRoom = softShadowRoom(10.dp)
     val shadowPadPx = with(density) { shadowRoom.roundToPx() }
+    // Filled during popup measure, before the window is positioned. Not state:
+    // a new size must not recompose the editor on the next key.
+    val reserve = remember { PlateReserve() }
     Popup(
         popupPositionProvider = object : PopupPositionProvider {
             override fun calculatePosition(
@@ -119,6 +124,7 @@ fun SelectionActionsPopup(
                     gapPx = gapPx,
                     marginPx = marginPx,
                     shadowPadPx = shadowPadPx,
+                    reserve = reserve.size,
                 )
             }
         },
@@ -130,50 +136,21 @@ fun SelectionActionsPopup(
             clippingEnabled = false,
         ),
     ) {
-        val shape = RoundedCornerShape(16.dp)
-        val plate = MaterialTheme.colorScheme.surface
-        // The popup is measured against the window. Keep the plate inside the
-        // same margin placeSelectionMenu uses, so the ⋮ button is never the
-        // piece that gets squeezed off the screen.
-        BoxWithConstraints {
-            val maxPlate = if (maxWidth.value.isFinite()) {
-                (maxWidth - MenuScreenMargin * 2).coerceAtLeast(0.dp)
-            } else {
-                maxWidth
-            }
-            Box(
-                modifier = Modifier
-                    .softShadowPadding(
-                        shape = shape,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
-                        room = shadowRoom,
-                        steps = softShadowSteps(LocalPerfTier.current),
+        val canPaste = LocalClipboardManager.current.hasText()
+        SubcomposeLayout { constraints ->
+            val windowWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else -1
+            if (!reserve.matches(windowWidth, canPaste, activeStyles)) {
+                val menuConstraints = menuMeasureConstraints(constraints, marginPx, shadowPadPx)
+                val primary = subcompose(ReservePrimary) {
+                    PrimaryMenu(
+                        canPaste = canPaste,
+                        onCut = onCut,
+                        onCopy = onCopy,
+                        onPaste = onPaste,
+                        onMore = onMore,
                     )
-                    .widthIn(max = maxPlate)
-                    .clip(shape)
-                    .background(plate),
-            ) {
-            KeepMenuAboveHandles()
-            val canPaste = LocalClipboardManager.current.hasText()
-            AnimatedContent(
-                targetState = overflow,
-                transitionSpec = {
-                    val forward = targetState
-                    val slide = tween<IntOffset>(180)
-                    val fade = tween<Float>(180)
-                    val enter = fadeIn(fade) + slideInHorizontally(slide) { width ->
-                        if (forward) width else -width
-                    }
-                    val exit = fadeOut(fade) + slideOutHorizontally(slide) { width ->
-                        if (forward) -width else width
-                    }
-                    (enter togetherWith exit).using(
-                        SizeTransform(clip = false) { _, _ -> tween(180) },
-                    )
-                },
-                label = "selection-menu",
-            ) { formatting ->
-                if (formatting) {
+                }.first().measure(menuConstraints)
+                val overflowPage = subcompose(ReserveOverflow) {
                     OverflowMenu(
                         activeStyles = activeStyles,
                         onHidden = onHidden,
@@ -187,16 +164,80 @@ fun SelectionActionsPopup(
                         onPlain = onPlain,
                         onBack = onBack,
                     )
-                } else {
-                    PrimaryMenu(
-                        canPaste = canPaste,
-                        onCut = onCut,
-                        onCopy = onCopy,
-                        onPaste = onPaste,
-                        onMore = onMore,
-                    )
-                }
+                }.first().measure(menuConstraints)
+                reserve.store(
+                    windowWidth = windowWidth,
+                    canPaste = canPaste,
+                    styles = activeStyles,
+                    size = IntSize(
+                        max(primary.width, overflowPage.width),
+                        max(primary.height, overflowPage.height),
+                    ),
+                )
             }
+            val content = subcompose(ReserveContent) {
+                val shape = RoundedCornerShape(16.dp)
+                val plate = MaterialTheme.colorScheme.surface
+                // The popup is measured against the window. Keep the plate inside the
+                // same margin placeSelectionMenu uses, so the ⋮ button is never the
+                // piece that gets squeezed off the screen.
+                BoxWithConstraints {
+                    val maxPlate = if (maxWidth.value.isFinite()) {
+                        (maxWidth - MenuScreenMargin * 2).coerceAtLeast(0.dp)
+                    } else {
+                        maxWidth
+                    }
+                    Box(
+                        modifier = Modifier
+                            .softShadowPadding(
+                                shape = shape,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                                room = shadowRoom,
+                                steps = softShadowSteps(LocalPerfTier.current),
+                            )
+                            .widthIn(max = maxPlate)
+                            .clip(shape)
+                            .background(plate),
+                    ) {
+                        KeepMenuAboveHandles()
+                        AnimatedContent(
+                            targetState = overflow,
+                            transitionSpec = {
+                                (fadeIn(tween(140)) togetherWith fadeOut(tween(100))).using(
+                                    SizeTransform(clip = false) { _, _ -> snap() },
+                                )
+                            },
+                            label = "selection-menu",
+                        ) { formatting ->
+                            if (formatting) {
+                                OverflowMenu(
+                                    activeStyles = activeStyles,
+                                    onHidden = onHidden,
+                                    onSelectAll = onSelectAll,
+                                    onBold = onBold,
+                                    onItalic = onItalic,
+                                    onStrike = onStrike,
+                                    onUnderline = onUnderline,
+                                    onMono = onMono,
+                                    onLink = onLink,
+                                    onPlain = onPlain,
+                                    onBack = onBack,
+                                )
+                            } else {
+                                PrimaryMenu(
+                                    canPaste = canPaste,
+                                    onCut = onCut,
+                                    onCopy = onCopy,
+                                    onPaste = onPaste,
+                                    onMore = onMore,
+                                )
+                            }
+                        }
+                    }
+                }
+            }.first().measure(constraints)
+            layout(content.width, content.height) {
+                content.place(0, 0)
             }
         }
     }
@@ -218,7 +259,59 @@ internal fun overflowVisibleRows(maxHeightDp: Float, rowDp: Float, backBlockDp: 
     return rows.coerceIn(3, 6)
 }
 
-private fun placeSelectionMenu(
+private const val ReservePrimary = "reserve-primary"
+private const val ReserveOverflow = "reserve-overflow"
+private const val ReserveContent = "reserve-content"
+
+/**
+ * Max plate of both menu pages, excluding the shadow padding. Recomputed only
+ * when [matches] fails, so a keystroke that does not change paste, width, or
+ * styles does not measure the hidden page again.
+ */
+private class PlateReserve {
+    private var windowWidth: Int = Int.MIN_VALUE
+    private var canPaste: Boolean = false
+    private var styles: Set<MarkStyle> = emptySet()
+    var size: IntSize = IntSize.Zero
+        private set
+
+    fun matches(windowWidth: Int, canPaste: Boolean, styles: Set<MarkStyle>): Boolean {
+        return this.windowWidth == windowWidth && this.canPaste == canPaste && this.styles == styles
+    }
+
+    fun store(windowWidth: Int, canPaste: Boolean, styles: Set<MarkStyle>, size: IntSize) {
+        this.windowWidth = windowWidth
+        this.canPaste = canPaste
+        this.styles = styles.toSet()
+        this.size = size
+    }
+}
+
+private fun menuMeasureConstraints(window: Constraints, marginPx: Int, shadowPadPx: Int): Constraints {
+    if (!window.hasBoundedWidth) {
+        val height = if (window.hasBoundedHeight) {
+            (window.maxHeight - shadowPadPx * 2).coerceAtLeast(0)
+        } else {
+            10_000
+        }
+        return Constraints(0, 10_000, 0, height)
+    }
+    val afterShadow = (window.maxWidth - shadowPadPx * 2).coerceAtLeast(0)
+    val afterMargin = (window.maxWidth - marginPx * 2).coerceAtLeast(0)
+    val maxHeight = if (window.hasBoundedHeight) {
+        (window.maxHeight - shadowPadPx * 2).coerceAtLeast(0)
+    } else {
+        Constraints.Infinity
+    }
+    return Constraints(0, min(afterShadow, afterMargin), 0, maxHeight)
+}
+
+/**
+ * Places the plate so the horizontal center and the edge nearest the text stay
+ * put when the page changes. [reserve] is the larger page, without shadow padding.
+ * Above or below is chosen from that height, not from the page on screen.
+ */
+internal fun placeSelectionMenu(
     anchorBounds: IntRect,
     windowSize: IntSize,
     popupContentSize: IntSize,
@@ -227,26 +320,50 @@ private fun placeSelectionMenu(
     gapPx: Int,
     marginPx: Int,
     shadowPadPx: Int,
+    reserve: IntSize,
 ): IntOffset {
     val selLeft = min(startHandle.left, endHandle.left)
     val selRight = max(startHandle.right, endHandle.right)
     val selTop = min(startHandle.top, endHandle.top)
     val selBottom = max(startHandle.bottom, endHandle.bottom)
-    // Padding gives the fade room inside the popup window. Place the plate, not
-    // the padding, so the labels stay on the same spot.
+    // Shadow padding is part of the popup window. Place the plate, not the padding.
     val plateWidth = (popupContentSize.width - shadowPadPx * 2).coerceAtLeast(0)
     val plateHeight = (popupContentSize.height - shadowPadPx * 2).coerceAtLeast(0)
-    val center = anchorBounds.left + ((selLeft + selRight) / 2f).toInt()
-    var x = center - plateWidth / 2
-    var y = anchorBounds.top + selTop.toInt() - plateHeight - gapPx
-    if (y < marginPx) {
-        y = anchorBounds.top + selBottom.toInt() + gapPx + 18
+    val reserved = if (reserve.width == 0 && reserve.height == 0) {
+        IntSize(plateWidth, plateHeight)
+    } else {
+        reserve
     }
-    val maxX = (windowSize.width - plateWidth - marginPx).coerceAtLeast(marginPx)
-    val maxY = (windowSize.height - plateHeight - marginPx).coerceAtLeast(marginPx)
-    x = x.coerceIn(marginPx, maxX)
-    y = y.coerceIn(marginPx, maxY)
-    return IntOffset(x - shadowPadPx, y - shadowPadPx)
+    val rawCenter = anchorBounds.left + ((selLeft + selRight) / 2f).toInt()
+    val low = marginPx + reserved.width / 2
+    val high = windowSize.width - marginPx - reserved.width / 2
+    val centerX = if (low <= high) {
+        rawCenter.coerceIn(low, high)
+    } else {
+        // The reserved plate is wider than the window. Stay inside the window
+        // without clamping against the page that happens to be showing.
+        rawCenter.coerceIn(0, windowSize.width.coerceAtLeast(0))
+    }
+    val x = centerX - plateWidth / 2 - shadowPadPx
+    val above = anchorBounds.top + selTop - gapPx - reserved.height >= marginPx
+    val y = if (above) {
+        val bottom = anchorBounds.top + selTop.toInt() - gapPx
+        val minBottom = marginPx + reserved.height
+        val maxBottom = windowSize.height - marginPx
+        val clamped = if (minBottom <= maxBottom) bottom.coerceIn(minBottom, maxBottom) else bottom
+        clamped - plateHeight - shadowPadPx
+    } else {
+        val top = anchorBounds.top + selBottom.toInt() + gapPx + 18
+        val minTop = marginPx
+        val maxTop = windowSize.height - marginPx - reserved.height
+        val clamped = if (minTop <= maxTop) {
+            top.coerceIn(minTop, maxTop)
+        } else {
+            top.coerceIn(0, windowSize.height.coerceAtLeast(0))
+        }
+        clamped - shadowPadPx
+    }
+    return IntOffset(x, y)
 }
 
 /**
