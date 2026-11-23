@@ -474,9 +474,19 @@ internal fun RichNoteEditor(
                         if (!hiddenUnlocked && cursorInHidden && prompt.armed && !prompt.dialogOpen) {
                             requestUnlock()
                         }
-                        val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end, listStart)
+                        val edit = ListAutoFormat.afterEdit(
+                            previous,
+                            next.text,
+                            next.selection.end,
+                            listStart,
+                            composing = next.composition != null,
+                        )
                         val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
-                        field = next.copy(text = edit.text, selection = selection)
+                        field = if (edit.text != next.text) {
+                            TextFieldValue(edit.text, selection, composition = null)
+                        } else {
+                            next.copy(text = edit.text, selection = selection)
+                        }
                         fieldNow.current = field
                         if (edit.text != previous) {
                             toolbar.suppressPlatform = false

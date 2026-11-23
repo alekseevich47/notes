@@ -205,4 +205,22 @@ class ListAutoFormatTest {
         val edit = ListAutoFormat.afterEdit("1. А\n2. Б", "1. А2. Б", cursor = "1. А".length)
         assertEquals("1. А2. Б", edit.text)
     }
+
+    @Test
+    fun composingSkipsCapitalizationUntilTheWordIsCommitted() {
+        val composing = ListAutoFormat.afterEdit("1. ", "1. а", cursor = "1. а".length, composing = true)
+        assertEquals("1. а", composing.text)
+        assertEquals("1. а".length, composing.cursor)
+        val committed = ListAutoFormat.afterEdit("1. ", "1. а", cursor = "1. а".length)
+        assertEquals("1. А", committed.text)
+    }
+
+    @Test
+    fun composingEnterStillContinuesTheList() {
+        val previous = "1. Первая"
+        val current = "1. Первая\n"
+        val edit = ListAutoFormat.afterEdit(previous, current, current.length, composing = true)
+        assertEquals("1. Первая\n2. ", edit.text)
+        assertEquals(edit.text.length, edit.cursor)
+    }
 }

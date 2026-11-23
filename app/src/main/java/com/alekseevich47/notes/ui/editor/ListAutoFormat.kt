@@ -16,12 +16,21 @@ object ListAutoFormat {
     private val emptyNumbered = Regex("""^\d+\.\s*$""")
     private val ru = Locale.forLanguageTag("ru")
 
-    fun afterEdit(previous: String, current: String, cursor: Int, startAt: Int = 1): Edit {
+    fun afterEdit(
+        previous: String,
+        current: String,
+        cursor: Int,
+        startAt: Int = 1,
+        composing: Boolean = false,
+    ): Edit {
         if (previous == current) return Edit(current, cursor.coerceIn(0, current.length))
         if (insertedSingleNewline(previous, current, cursor)) {
             val stepped = applyEnter(current, cursor)
             return renumber(stepped.text, stepped.cursor, startAt)
         }
+        // Capitalize and renumber only after the IME commits the word. A live
+        // composition range must keep matching the text the keyboard still owns.
+        if (composing) return Edit(current, cursor.coerceIn(0, current.length))
         val collapsed = collapseEmptyItem(previous, current)
         if (collapsed != null) return renumber(collapsed.text, collapsed.cursor, startAt)
         return renumber(current, cursor.coerceIn(0, current.length), startAt)
