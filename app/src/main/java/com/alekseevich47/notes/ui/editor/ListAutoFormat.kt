@@ -16,22 +16,35 @@ object ListAutoFormat {
     private val emptyNumbered = Regex("""^\d+\.\s*$""")
     private val ru = Locale.forLanguageTag("ru")
 
-    fun afterEdit(previous: String, current: String, cursor: Int): Edit {
+    fun afterEdit(previous: String, current: String, cursor: Int, startAt: Int = 1): Edit {
         if (previous == current) return Edit(current, cursor.coerceIn(0, current.length))
         if (insertedSingleNewline(previous, current, cursor)) {
             val stepped = applyEnter(current, cursor)
-            return renumber(stepped.text, stepped.cursor)
+            return renumber(stepped.text, stepped.cursor, startAt)
         }
         val collapsed = collapseEmptyItem(previous, current)
-        if (collapsed != null) return renumber(collapsed.text, collapsed.cursor)
-        return renumber(current, cursor.coerceIn(0, current.length))
+        if (collapsed != null) return renumber(collapsed.text, collapsed.cursor, startAt)
+        return renumber(current, cursor.coerceIn(0, current.length), startAt)
     }
 
-    fun renumber(text: String, cursor: Int): Edit {
+    /**
+     * Number of the next item when a table sits inside a list.
+     * Trailing blank lines are skipped. A non-list line ends the run.
+     */
+    fun continuationStart(text: String): Int {
+        val lines = text.split('\n')
+        var index = lines.lastIndex
+        while (index >= 0 && lines[index].isBlank()) index--
+        if (index < 0) return 1
+        val match = numbered.matchEntire(lines[index]) ?: return 1
+        return (match.groupValues[1].toIntOrNull() ?: 0) + 1
+    }
+
+    fun renumber(text: String, cursor: Int, startAt: Int = 1): Edit {
         val safeCursor = cursor.coerceIn(0, text.length)
         val lines = text.split('\n')
         val (lineIndex, column) = lineColumn(lines, safeCursor)
-        val rebuilt = renumberLines(lines)
+        val rebuilt = renumberLines(lines, startAt)
         val oldPrefix = prefixLength(lines.getOrElse(lineIndex) { "" })
         val newPrefix = prefixLength(rebuilt.getOrElse(lineIndex) { "" })
         val newColumn = if (oldPrefix > 0 || newPrefix > 0) {
@@ -50,7 +63,7 @@ object ListAutoFormat {
         return Edit(newText, resolved)
     }
 
-    fun toggleLine(text: String, cursor: Int): Edit {
+    fun toggleLine(text: String, cursor: Int, startAt: Int = 1): Edit {
         val safe = cursor.coerceIn(0, text.length)
         val lineStart = text.lastIndexOf('\n', (safe - 1).coerceAtLeast(0)).let { index ->
             if (index < 0) 0 else index + 1
@@ -66,7 +79,7 @@ object ListAutoFormat {
         }
         val updated = text.substring(0, lineStart) + replaced + text.substring(lineEndIndex)
         val nextCursor = (lineStart + replaced.length).coerceAtMost(updated.length)
-        return renumber(updated, nextCursor)
+        return renumber(updated, nextCursor, startAt)
     }
 
     /**
@@ -164,7 +177,7 @@ object ListAutoFormat {
         return Edit(updated, cursor + insert.length)
     }
 
-    internal fun renumberLines(lines: List<String>): List<String> {
+    internal fun renumberLines(lines: List<String>, startAt: Int = 1): List<String> {
         val out = lines.toMutableList()
         var index = 0
         while (index < out.size) {
@@ -174,7 +187,8 @@ object ListAutoFormat {
             }
             var end = index
             while (end < out.size && numbered.matchEntire(out[end]) != null) end++
-            var number = 1
+            val continues = startAt > 1 && out.subList(0, index).all { it.isBlank() }
+            var number = if (continues) startAt else 1
             for (line in index until end) {
                 val content = numbered.matchEntire(out[line])!!.groupValues[2]
                 val normalized = capitalize(content.trimStart())

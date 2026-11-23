@@ -188,7 +188,6 @@ fun NotesListScreen(
                 .padding(end = 22.dp, bottom = fabBottom)
                 .size(60.dp),
             shape = CircleShape,
-            elevation = 10.dp,
         ) {
             Box(
                 Modifier

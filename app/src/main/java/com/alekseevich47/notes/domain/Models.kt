@@ -88,6 +88,9 @@ data class Note(
     val searchBlob: String,
 )
 
+/** Caret in [NoteDocuments.flow] after a structural edit. */
+data class BlockCaret(val blockIndex: Int, val offset: Int)
+
 object NoteDocuments {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -133,6 +136,65 @@ object NoteDocuments {
         }
         val next = document.blocks.filterNot { it.kind == BlockKind.TABLE && it.table?.id == id }
         return pack(next)
+    }
+
+    /**
+     * Backspace at the start of the text block under a table removes that table.
+     * [textIndex] is that text block in [flow]. The offset is the start of the
+     * paragraph that sat under the table; legacy notes insert a newline when the
+     * paragraphs join, and the caret stays on the following text.
+     */
+    fun caretAfterRemovingTable(document: NoteDocument, textIndex: Int): BlockCaret? {
+        val before = flow(document)
+        val following = before.getOrNull(textIndex) ?: return null
+        if (following.kind != BlockKind.TEXT) return null
+        val tableIndex = textIndex - 1
+        val table = before.getOrNull(tableIndex) ?: return null
+        if (table.kind != BlockKind.TABLE) return null
+        val tableId = table.table?.id ?: return null
+        val previous = before.getOrNull(tableIndex - 1)?.takeIf { it.kind == BlockKind.TEXT }
+        val anchorOriginal = if (previous != null) tableIndex - 1 else textIndex
+        val anchorInRemaining = if (anchorOriginal > tableIndex) anchorOriginal - 1 else anchorOriginal
+        val boundary = previous?.text?.length ?: 0
+
+        data class Node(var block: NoteBlock, val sources: MutableList<Int>)
+        val merged = mutableListOf<Node>()
+        before.filterIndexed { index, _ -> index != tableIndex }.forEachIndexed { index, block ->
+            val prior = merged.lastOrNull()
+            if (block.kind == BlockKind.TEXT && prior != null && prior.block.kind == BlockKind.TEXT) {
+                val shift = prior.block.text.length
+                val marks = prior.block.marks + block.marks.map { mark ->
+                    mark.copy(start = mark.start + shift, end = mark.end + shift)
+                }
+                prior.block = prior.block.copy(text = prior.block.text + block.text, marks = marks)
+                prior.sources += index
+            } else {
+                merged += Node(block, mutableListOf(index))
+            }
+        }
+        val kept = merged.filter { node ->
+            node.block.kind == BlockKind.TABLE || node.block.text.isNotEmpty() || node.block.marks.isNotEmpty()
+        }.ifEmpty {
+            listOf(Node(NoteBlock(kind = BlockKind.TEXT), mutableListOf(anchorInRemaining)))
+        }
+        var blockIndex = kept.indexOfFirst { anchorInRemaining in it.sources }
+        if (blockIndex < 0) {
+            blockIndex = kept.indexOfFirst { it.block.kind == BlockKind.TEXT }.coerceAtLeast(0)
+        }
+        val simulated = kept.getOrNull(blockIndex)?.block?.text.orEmpty()
+        val actualBlocks = flow(withoutTable(document, tableId))
+        val resolvedIndex = blockIndex.coerceIn(0, (actualBlocks.size - 1).coerceAtLeast(0))
+        val actual = actualBlocks.getOrNull(resolvedIndex)?.text.orEmpty()
+        val offset = if (
+            boundary < actual.length &&
+            actual.getOrNull(boundary) == '\n' &&
+            actual.removeRange(boundary, boundary + 1) == simulated
+        ) {
+            boundary + 1
+        } else {
+            boundary.coerceIn(0, actual.length)
+        }
+        return BlockCaret(resolvedIndex, offset)
     }
 
     /** Reading order. Legacy notes gain a text block under the tables so the caret can sit there. */

@@ -68,16 +68,19 @@ fun EditorFormatBar(
     val divider = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
     val plate = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
     ColumnBar(plate, divider, modifier) {
-        FormatIcon(Icons.Outlined.FormatBold, "Жирный", MarkStyle.BOLD in controller.activeStyles, controller.bold)
+        // Read lambdas at click time: SideEffect in the editor refreshes them
+        // without notifying this bar when activeStyles/listActive stay unchanged
+        // (empty note, caret only). Capturing controller.bold here freezes {}.
+        FormatIcon(Icons.Outlined.FormatBold, "Жирный", MarkStyle.BOLD in controller.activeStyles) { controller.bold() }
         BarDivider(divider)
-        FormatIcon(Icons.Outlined.FormatItalic, "Курсив", MarkStyle.ITALIC in controller.activeStyles, controller.italic)
-        FormatIcon(FormatStrikeS, "Зачёркнутый", MarkStyle.STRIKE in controller.activeStyles, controller.strike)
-        FormatIcon(Icons.Outlined.FormatUnderlined, "Подчёркнутый", MarkStyle.UNDERLINE in controller.activeStyles, controller.underline)
-        FormatIcon(Icons.Outlined.VisibilityOff, "Скрытый", MarkStyle.HIDDEN in controller.activeStyles, controller.hidden)
+        FormatIcon(Icons.Outlined.FormatItalic, "Курсив", MarkStyle.ITALIC in controller.activeStyles) { controller.italic() }
+        FormatIcon(FormatStrikeS, "Зачёркнутый", MarkStyle.STRIKE in controller.activeStyles) { controller.strike() }
+        FormatIcon(Icons.Outlined.FormatUnderlined, "Подчёркнутый", MarkStyle.UNDERLINE in controller.activeStyles) { controller.underline() }
+        FormatIcon(Icons.Outlined.VisibilityOff, "Скрытый", MarkStyle.HIDDEN in controller.activeStyles) { controller.hidden() }
         BarDivider(divider)
-        FormatIcon(FormatTableGrid, "Таблица", active = false, onClick = controller.table)
+        FormatIcon(FormatTableGrid, "Таблица", active = false) { controller.table() }
         BarDivider(divider)
-        FormatIcon(Icons.Outlined.FormatListBulleted, "Список", controller.listActive, controller.list)
+        FormatIcon(Icons.Outlined.FormatListBulleted, "Список", controller.listActive) { controller.list() }
     }
 }
 

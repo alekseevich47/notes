@@ -32,6 +32,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -79,6 +81,7 @@ import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.PinDialog
 import com.alekseevich47.notes.ui.components.TableSizeDialog
 import com.alekseevich47.notes.ui.editor.EditorFormatBar
+import com.alekseevich47.notes.ui.editor.ListAutoFormat
 import com.alekseevich47.notes.ui.editor.NoteEditorController
 import com.alekseevich47.notes.ui.editor.NoteSurfaceBridge
 import com.alekseevich47.notes.ui.editor.RichNoteEditor
@@ -94,6 +97,8 @@ import kotlin.math.roundToInt
 
 private enum class HiddenPinStage { UNLOCK, CREATE, CONFIRM }
 
+private data class CaretRequest(val token: Int = 0, val blockIndex: Int = 0, val offset: Int = 0)
+
 @Composable
 fun EditorScreen(
     noteId: Long,
@@ -105,6 +110,8 @@ fun EditorScreen(
     val note by viewModel.note.collectAsState()
     val unlocked by viewModel.unlocked.collectAsState()
     val player by viewModel.playerUi.collectAsState()
+    val canUndo by viewModel.canUndo.collectAsState()
+    val canRedo by viewModel.canRedo.collectAsState()
     var confirmDelete by remember { mutableStateOf(false) }
     var askPin by remember { mutableStateOf(false) }
     var pinError by remember { mutableStateOf<String?>(null) }
@@ -117,6 +124,7 @@ fun EditorScreen(
     val bodyTap = remember { MutableInteractionSource() }
     var insertBlock by remember { mutableIntStateOf(0) }
     var insertCursor by remember { mutableIntStateOf(0) }
+    var caretRequest by remember { mutableStateOf(CaretRequest()) }
     val surface = remember { NoteSurfaceBridge() }
     var bodyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     SideEffect {
@@ -129,6 +137,7 @@ fun EditorScreen(
 
     LaunchedEffect(noteId) {
         formats.bodyFocused = false
+        caretRequest = CaretRequest()
         viewModel.bind(noteId)
         askPin = false
         pinError = null
@@ -148,7 +157,9 @@ fun EditorScreen(
         askPin = true
     }
 
-    val current = note
+    // bind() runs after the first frame, and this ViewModel still holds the note
+    // that was open before. Paint nothing until the loaded note is the one requested.
+    val current = note?.takeIf { it.id == noteId }
     Column(
         modifier
             .fillMaxSize()
@@ -163,6 +174,12 @@ fun EditorScreen(
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Назад")
             }
             Spacer(Modifier.weight(1f))
+            IconButton(onClick = viewModel::undo, enabled = canUndo && current != null) {
+                Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Отменить")
+            }
+            IconButton(onClick = viewModel::redo, enabled = canRedo && current != null) {
+                Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Вернуть")
+            }
             IconButton(onClick = { confirmDelete = true }) {
                 Icon(Icons.Outlined.Delete, contentDescription = "Удалить", tint = MaterialTheme.colorScheme.error)
             }
@@ -252,6 +269,31 @@ fun EditorScreen(
                                             insertCursor = formats.tableCursor
                                             askTable = true
                                         },
+                                        onDeleteTableAbove = run {
+                                            val above = flow.getOrNull(index - 1)
+                                            val table = above?.table
+                                            if (above?.kind == BlockKind.TABLE && table != null) {
+                                                {
+                                                    val caret = NoteDocuments.caretAfterRemovingTable(
+                                                        current.document,
+                                                        index,
+                                                    )
+                                                    viewModel.removeTable(table.id)
+                                                    if (caret != null) {
+                                                        caretRequest = CaretRequest(
+                                                            token = caretRequest.token + 1,
+                                                            blockIndex = caret.blockIndex,
+                                                            offset = caret.offset,
+                                                        )
+                                                    }
+                                                }
+                                            } else {
+                                                null
+                                            }
+                                        },
+                                        caretToken = if (caretRequest.blockIndex == index) caretRequest.token else 0,
+                                        caretOffset = if (caretRequest.blockIndex == index) caretRequest.offset else 0,
+                                        listStart = listStartFor(flow, index),
                                     )
                                     BlockKind.TABLE -> {
                                         val table = block.table
@@ -449,6 +491,10 @@ private fun NoteTextBlock(
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
     onAskTable: () -> Unit,
+    onDeleteTableAbove: (() -> Unit)? = null,
+    caretToken: Int = 0,
+    caretOffset: Int = 0,
+    listStart: Int = 1,
 ) {
     var focused by remember(noteId, blockIndex) { mutableStateOf(false) }
     var top by remember(noteId, blockIndex) { mutableIntStateOf(0) }
@@ -490,7 +536,20 @@ private fun NoteTextBlock(
         blockIndex = blockIndex,
         placeholder = placeholder,
         onFocused = { focused = it },
+        onDeleteTableAbove = onDeleteTableAbove,
+        caretToken = caretToken,
+        caretOffset = caretOffset,
+        listStart = listStart,
     )
+}
+
+/** First number under a table that sits inside a numbered list. */
+private fun listStartFor(flow: List<NoteBlock>, index: Int): Int {
+    if (flow.getOrNull(index - 1)?.kind != BlockKind.TABLE) return 1
+    var previous = index - 1
+    while (previous >= 0 && flow[previous].kind != BlockKind.TEXT) previous--
+    val text = flow.getOrNull(previous)?.text ?: return 1
+    return ListAutoFormat.continuationStart(text)
 }
 
 internal fun lastEditedCaption(

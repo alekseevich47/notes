@@ -1,7 +1,9 @@
 package com.alekseevich47.notes
 
+import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.BlockKind
 import com.alekseevich47.notes.domain.CellMarks
+import com.alekseevich47.notes.domain.NoteBlock
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteDocuments
@@ -236,5 +238,42 @@ class TableDocumentTest {
         assertEquals(200f, widths[1], 0.1f)
         val spread = growingColumnWidths(intArrayOf(1, 1), availablePx = 400f, minPx = 72f, maxPx = 200f)
         assertEquals(400f, spread.sum(), 0.5f)
+    }
+
+    @Test
+    fun backspaceUnderATableJoinsTheParagraphs() {
+        val legacy = NoteDocument(text = "Hello", tables = listOf(table), trailing = "after")
+        assertEquals(BlockCaret(0, "Hello\nafter".indexOf("after")), NoteDocuments.caretAfterRemovingTable(legacy, 2))
+
+        val emptyTail = NoteDocument(text = "Hello", tables = listOf(table))
+        assertEquals(BlockCaret(0, "Hello".length), NoteDocuments.caretAfterRemovingTable(emptyTail, 2))
+
+        val marked = NoteDocument(
+            blocks = listOf(
+                NoteBlock(kind = BlockKind.TEXT, text = "Hello"),
+                NoteBlock(kind = BlockKind.TABLE, table = table),
+                NoteBlock(
+                    kind = BlockKind.TEXT,
+                    text = "after",
+                    marks = listOf(TextMark(0, 1, MarkStyle.BOLD)),
+                ),
+            ),
+        )
+        assertEquals(BlockCaret(0, "Hello".length), NoteDocuments.caretAfterRemovingTable(marked, 2))
+    }
+
+    @Test
+    fun backspaceUnderALaterTableKeepsTheTextAbove() {
+        val second = NoteTable(id = "t2", cells = listOf(listOf("z")))
+        val document = NoteDocument(
+            blocks = listOf(
+                NoteBlock(kind = BlockKind.TEXT, text = "Hello"),
+                NoteBlock(kind = BlockKind.TABLE, table = table),
+                NoteBlock(kind = BlockKind.TEXT, text = "mid", marks = listOf(TextMark(0, 1, MarkStyle.BOLD))),
+                NoteBlock(kind = BlockKind.TABLE, table = second),
+                NoteBlock(kind = BlockKind.TEXT, text = "tail", marks = listOf(TextMark(0, 1, MarkStyle.ITALIC))),
+            ),
+        )
+        assertEquals(BlockCaret(2, "mid".length), NoteDocuments.caretAfterRemovingTable(document, 4))
     }
 }

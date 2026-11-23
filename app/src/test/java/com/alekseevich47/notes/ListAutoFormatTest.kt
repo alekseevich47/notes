@@ -98,6 +98,19 @@ class ListAutoFormatTest {
     }
 
     @Test
+    fun itemAfterATableKeepsTheNextNumber() {
+        assertEquals(3, ListAutoFormat.continuationStart("1. Текст.\n2. "))
+        assertEquals(3, ListAutoFormat.continuationStart("1. Текст.\n2. \n"))
+        assertEquals(1, ListAutoFormat.continuationStart("1. Текст.\nобычный"))
+        val typed = ListAutoFormat.afterEdit("", "3.", cursor = 2, startAt = 3)
+        assertEquals("3. ", typed.text)
+        val underBlank = ListAutoFormat.afterEdit("\n", "\n3.", cursor = 3, startAt = 3)
+        assertEquals("\n3. ", underBlank.text)
+        val prose = ListAutoFormat.renumber("текст\n3. Дальше", cursor = 0, startAt = 3)
+        assertEquals("текст\n1. Дальше", prose.text)
+    }
+
+    @Test
     fun plainTextStaysUntouched() {
         val edit = ListAutoFormat.afterEdit("Заметка", "Заметки", cursor = 7)
         assertEquals("Заметки", edit.text)

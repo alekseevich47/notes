@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -34,14 +35,13 @@ data class GlassPalette(
     val fill: Color,
     val tint: Color,
     val edge: Color,
-    val shadow: Color,
     val sheen: List<Color>,
 )
 
 object LiquidGlassTokens {
     val Corner = 32.dp
     val Blur = 22.dp
-    val Elevation = 14.dp
+    val Elevation = 6.dp
 
     @Composable
     fun palette(): GlassPalette {
@@ -51,7 +51,6 @@ object LiquidGlassTokens {
                 fill = Color(0xFF1A1B22).copy(alpha = 0.82f),
                 tint = Color(0xFF6C4CFF).copy(alpha = 0.16f),
                 edge = Color.White.copy(alpha = 0.16f),
-                shadow = Color.Black.copy(alpha = 0.45f),
                 sheen = listOf(
                     Color.White.copy(alpha = 0.14f),
                     Color.White.copy(alpha = 0.04f),
@@ -63,7 +62,6 @@ object LiquidGlassTokens {
                 fill = Color.White.copy(alpha = 0.74f),
                 tint = Color(0xFFE8EEF8).copy(alpha = 0.28f),
                 edge = Color.White.copy(alpha = 0.72f),
-                shadow = Color(0xFF1F2687).copy(alpha = 0.18f),
                 sheen = listOf(
                     Color.White.copy(alpha = 0.55f),
                     Color.White.copy(alpha = 0.16f),
@@ -88,16 +86,15 @@ fun LiquidGlassPlate(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val palette = LiquidGlassTokens.palette()
-    // The plate keeps the caller's size. The shadow is a larger layer behind it,
-    // outside the offscreen buffer — that buffer is only as big as the plate and
-    // would clip the penumbra to a hard rim.
+    // Same light drop shadow as the sticky player. It stays outside the offscreen
+    // buffer: that buffer is only as big as the plate and would clip the shadow.
     Box(modifier = modifier) {
         if (elevation > 0.dp) {
-            SoftShadowLayer(
-                shape = shape,
-                color = palette.shadow,
-                room = softShadowRoom(elevation),
-                modifier = if (halo) Modifier.matchParentSize().padding(18.dp) else Modifier.matchParentSize(),
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .then(if (halo) Modifier.padding(18.dp) else Modifier)
+                    .shadow(elevation, shape, clip = false),
             )
         }
         Box(

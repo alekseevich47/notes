@@ -26,10 +26,23 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputMethodRequest
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +94,7 @@ import kotlin.math.min
 
 private val numberedLine = Regex("""^\d+\.\s?.*""")
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun RichNoteEditor(
     document: NoteDocument,
@@ -97,9 +111,59 @@ internal fun RichNoteEditor(
     blockIndex: Int = 0,
     placeholder: String = "Начните писать…",
     onFocused: (Boolean) -> Unit = {},
+    onDeleteTableAbove: (() -> Unit)? = null,
+    caretToken: Int = 0,
+    caretOffset: Int = 0,
+    listStart: Int = 1,
 ) {
     var field by remember {
         mutableStateOf(TextFieldValue(document.text, TextRange(document.text.length)))
+    }
+    val fieldNow = remember { FieldSlot(field) }
+    fieldNow.current = field
+    val deleteTableAbove = rememberUpdatedState(onDeleteTableAbove)
+    val lastTableBackspace = remember { longArrayOf(0L) }
+    fun backspaceAtStart(): Boolean {
+        val delete = deleteTableAbove.value ?: return false
+        val current = fieldNow.current
+        if (!(current.selection.collapsed && current.selection.min == 0)) return false
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastTableBackspace[0] < 150L) return true
+        lastTableBackspace[0] = now
+        delete()
+        return true
+    }
+    val tableBackspace = remember {
+        androidx.compose.ui.platform.PlatformTextInputInterceptor { request, nextHandler ->
+            nextHandler.startInputMethod(
+                object : PlatformTextInputMethodRequest {
+                    override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
+                        return TableBackspaceConnection(request.createInputConnection(outAttributes)) {
+                            backspaceAtStart()
+                        }
+                    }
+                },
+            )
+        }
+    }
+    val keyboard = LocalSoftwareKeyboardController.current
+    var consumedCaret by remember { mutableIntStateOf(0) }
+    LaunchedEffect(document.text, caretToken) {
+        if (caretToken > 0 && caretToken != consumedCaret) {
+            consumedCaret = caretToken
+            val cursor = caretOffset.coerceIn(0, document.text.length)
+            field = TextFieldValue(document.text, TextRange(cursor))
+            fieldNow.current = field
+            withFrameNanos { }
+            runCatching { focusRequester.requestFocus() }
+            keyboard?.show()
+            return@LaunchedEffect
+        }
+        if (field.text != document.text) {
+            val cursor = field.selection.end.coerceIn(0, document.text.length)
+            field = TextFieldValue(document.text, TextRange(cursor))
+            fieldNow.current = field
+        }
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var textCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -113,6 +177,16 @@ internal fun RichNoteEditor(
     val ink = MaterialTheme.colorScheme.onSurface
     val censorLayout = layout
     val censor = !hiddenUnlocked && document.marks.any { it.style == MarkStyle.HIDDEN }
+    val spoiler = rememberSpoilerPaint(
+        text = field.text,
+        marks = document.marks,
+        style = MaterialTheme.typography.bodyLarge.copy(
+            color = ink,
+            fontFamily = NotesFont,
+        ),
+        ink = ink,
+        widthPx = if (censor) censorLayout?.size?.width ?: 0 else 0,
+    )
     if (field.selection.collapsed && (menuOverflow || menuVisible)) {
         menuOverflow = false
         menuVisible = false
@@ -203,7 +277,7 @@ internal fun RichNoteEditor(
 
     fun toggleList() {
         val previous = field.text
-        publish(previous, ListAutoFormat.toggleLine(previous, field.selection.min))
+        publish(previous, ListAutoFormat.toggleLine(previous, field.selection.min, listStart))
     }
 
     fun overlapsLockedHidden(): Boolean {
@@ -234,7 +308,7 @@ internal fun RichNoteEditor(
         val previous = field.text
         clipboard.setText(AnnotatedString(previous.substring(start, end)))
         val proposed = previous.removeRange(start, end)
-        publish(previous, ListAutoFormat.afterEdit(previous, proposed, start))
+        publish(previous, ListAutoFormat.afterEdit(previous, proposed, start, listStart))
         hideMenu()
     }
 
@@ -327,6 +401,7 @@ internal fun RichNoteEditor(
         collapseSelection()
     }
 
+    InterceptPlatformTextInput(interceptor = tableBackspace) {
     Column(modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth()) {
             CompositionLocalProvider(LocalTextToolbar provides toolbar) {
@@ -355,9 +430,10 @@ internal fun RichNoteEditor(
                         if (!hiddenUnlocked && cursorInHidden && prompt.armed && !prompt.dialogOpen) {
                             requestUnlock()
                         }
-                        val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end)
+                        val edit = ListAutoFormat.afterEdit(previous, next.text, next.selection.end, listStart)
                         val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
                         field = next.copy(text = edit.text, selection = selection)
+                        fieldNow.current = field
                         if (edit.text != previous) {
                             toolbar.suppressPlatform = false
                             releasePlatformMenu = false
@@ -384,6 +460,11 @@ internal fun RichNoteEditor(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onPreviewKeyEvent { event ->
+                            event.type == KeyEventType.KeyDown &&
+                                event.key == Key.Backspace &&
+                                backspaceAtStart()
+                        }
                         .onGloballyPositioned { textCoordinates = it }
                         .focusRequester(focusRequester)
                         .onFocusChanged {
@@ -397,9 +478,7 @@ internal fun RichNoteEditor(
                             onFocused(it.isFocused)
                         }
                         .drawWithContent {
-                            if (censor && censorLayout != null) {
-                                drawSpoilerShadows(censorLayout, document.marks, ink)
-                            }
+                            if (censor) drawSpoilerShadows(spoiler, document.marks, ink)
                             drawContent()
                         },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
@@ -457,6 +536,35 @@ internal fun RichNoteEditor(
                 }
             }
         }
+    }
+    }
+}
+
+private class FieldSlot(var current: TextFieldValue)
+
+private class TableBackspaceConnection(
+    delegate: InputConnection,
+    private val onBackspaceAtStart: () -> Boolean,
+) : InputConnectionWrapper(delegate, true) {
+    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+        if (beforeLength > 0 && afterLength == 0 && onBackspaceAtStart()) return true
+        return super.deleteSurroundingText(beforeLength, afterLength)
+    }
+
+    override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+        if (beforeLength > 0 && afterLength == 0 && onBackspaceAtStart()) return true
+        return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+    }
+
+    override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (
+            event.action == android.view.KeyEvent.ACTION_DOWN &&
+            event.keyCode == android.view.KeyEvent.KEYCODE_DEL &&
+            onBackspaceAtStart()
+        ) {
+            return true
+        }
+        return super.sendKeyEvent(event)
     }
 }
 
@@ -560,10 +668,16 @@ private fun stylesTouching(marks: List<TextMark>, selection: TextRange): Set<Mar
 private fun lineNumbered(text: String, cursor: Int): Boolean {
     if (text.isEmpty()) return false
     val safe = cursor.coerceIn(0, text.length)
-    val lineStart = text.lastIndexOf('\n', (safe - 1).coerceAtLeast(0)).let { index ->
+    // Search strictly before the caret. At offset 0, coerceAtLeast(0) would
+    // look at the caret itself, so a leading '\n' made lineStart > lineEnd.
+    val lineStart = if (safe == 0) {
+        0
+    } else {
+        val index = text.lastIndexOf('\n', safe - 1)
         if (index < 0) 0 else index + 1
     }
     val lineEnd = text.indexOf('\n', safe).let { index -> if (index < 0) text.length else index }
+    if (lineEnd < lineStart) return false
     return numberedLine.matches(text.substring(lineStart, lineEnd))
 }
 

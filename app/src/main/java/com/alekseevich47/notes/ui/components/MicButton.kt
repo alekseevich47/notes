@@ -113,12 +113,7 @@ fun MicButton(
     val idleInk = MaterialTheme.colorScheme.onSurfaceVariant
     Box(
         modifier = modifier
-            .shadow(
-                elevation = if (phase == MicPhase.RECORDING) 18.dp else 10.dp,
-                shape = CircleShape,
-                ambientColor = NotesPurple.copy(alpha = if (phase == MicPhase.RECORDING) 0.45f else 0.18f),
-                spotColor = NotesPurple.copy(alpha = if (phase == MicPhase.RECORDING) 0.55f else 0.2f),
-            )
+            .shadow(6.dp, CircleShape)
             .clip(CircleShape)
             .background(plate)
             .clickable(

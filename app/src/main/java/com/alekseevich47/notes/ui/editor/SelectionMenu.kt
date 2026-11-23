@@ -24,7 +24,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
@@ -169,17 +168,24 @@ private fun placeSelectionMenu(
  * Re-add this popup above that layer once it is attached. The window stays
  * [WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE], so handle drags outside the menu still land
  * on the text field.
+ *
+ * The type change removes the window and adds it again. Hide it until that move
+ * finishes, otherwise the menu flashes on, vanishes, and pops back.
  */
 @Composable
 private fun KeepMenuAboveHandles() {
     val view = LocalView.current
-    val lifted = remember { booleanArrayOf(false) }
     DisposableEffect(view) {
         val root = view.rootView
+        if (windowType(root) != selectionMenuWindowType) root.alpha = 0f
         val lift = Runnable {
-            if (lifted[0]) return@Runnable
-            lifted[0] = true
-            if (!liftSelectionMenuWindow(root)) lifted[0] = false
+            if (!root.isAttachedToWindow) return@Runnable
+            if (windowType(root) != selectionMenuWindowType) {
+                liftSelectionMenuWindow(root)
+            }
+            // Re-adding the window detaches it and runs a new effect. Only the
+            // effect that still owns the view may reveal it.
+            if (root.isAttachedToWindow) root.alpha = 1f
         }
         val listener = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) {
@@ -199,15 +205,20 @@ private fun KeepMenuAboveHandles() {
     }
 }
 
+// Public SDK stubs omit TYPE_APPLICATION_ABOVE_SUB_PANEL (@hide); value is 1005.
+private val selectionMenuWindowType = 1005
+
+private fun windowType(root: View): Int? = (root.layoutParams as? WindowManager.LayoutParams)?.type
+
+@Suppress("WrongConstant")
 private fun liftSelectionMenuWindow(root: View): Boolean {
     val params = root.layoutParams as? WindowManager.LayoutParams ?: return false
     if (!root.isAttachedToWindow) return false
-    // Public SDK stubs omit TYPE_APPLICATION_ABOVE_SUB_PANEL (@hide); value is 1005.
-    val above = 1005
-    if (params.type == above) return true
+    // Public SDK stubs omit TYPE_APPLICATION_ABOVE_SUB_PANEL (@hide).
+    if (params.type == selectionMenuWindowType) return true
     val previous = params.type
     val windowManager = root.context.getSystemService(WindowManager::class.java) ?: return false
-    params.type = above
+    params.type = selectionMenuWindowType
     return try {
         windowManager.removeViewImmediate(root)
         windowManager.addView(root, params)

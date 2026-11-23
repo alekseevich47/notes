@@ -1,8 +1,10 @@
 package com.alekseevich47.notes
 
+import androidx.compose.ui.graphics.Color
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.ui.editor.HiddenText
+import com.alekseevich47.notes.ui.editor.spoilerAnnotated
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,14 +38,20 @@ class HiddenTextTest {
     }
 
     @Test
-    fun spoilerIsOffsetCopiesNotAPlate() {
-        val offsets = HiddenText.shadowOffsetsDp
-        assertTrue(offsets.size >= 8)
-        assertEquals(offsets.size, HiddenText.shadowAlphas.size)
-        assertTrue(offsets.any { it.first > 0f })
-        assertTrue(offsets.any { it.first < 0f })
-        assertTrue(offsets.any { it.second > 0f })
-        assertTrue(offsets.any { it.second < 0f })
-        assertTrue(HiddenText.shadowAlphas.all { it in 0.04f..0.45f })
+    fun spoilerBlurIsWideEnoughToMeltGlyphs() {
+        assertTrue(HiddenText.BLUR_EM >= 0.4f)
+    }
+
+    @Test
+    fun spoilerInkColorsOnlyTheHiddenSpan() {
+        val annotated = spoilerAnnotated(
+            "Secret prase testh",
+            listOf(TextMark(7, 12, MarkStyle.HIDDEN)),
+            Color.Black,
+        )
+        val colors = annotated.spanStyles.filter { it.item.color == Color.Black }
+        assertEquals(1, colors.size)
+        assertEquals(7, colors[0].start)
+        assertEquals(12, colors[0].end)
     }
 }

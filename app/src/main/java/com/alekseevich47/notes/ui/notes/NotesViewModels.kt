@@ -29,6 +29,8 @@ import kotlinx.coroutines.launch
 import java.time.ZoneId
 import javax.inject.Inject
 
+private const val EDIT_HISTORY_LIMIT = 1000
+
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class NotesViewModel @Inject constructor(
@@ -83,20 +85,37 @@ class EditorViewModel @Inject constructor(
 
     private var boundId: Long = -1
     private var saveJob: kotlinx.coroutines.Job? = null
+    private var loadJob: kotlinx.coroutines.Job? = null
+    private val undoStack = ArrayDeque<EditSnapshot>()
+    private val redoStack = ArrayDeque<EditSnapshot>()
+    private var restoringHistory = false
+    private val _canUndo = MutableStateFlow(false)
+    private val _canRedo = MutableStateFlow(false)
+    val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
+    val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
 
     fun bind(id: Long) {
         // Activity-scoped: leaving and opening the same note must ask for the PIN again.
         _unlocked.value = false
-        if (boundId == id && _note.value != null) return
+        if (boundId == id && _note.value?.id == id) return
         boundId = id
-        viewModelScope.launch {
-            _note.value = repository.get(id)
+        undoStack.clear()
+        redoStack.clear()
+        refreshHistory()
+        // Drop the previous note before the load so the editor cannot paint it.
+        if (_note.value?.id != id) _note.value = null
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
+            val loaded = repository.get(id)
+            if (boundId != id) return@launch
+            _note.value = loaded
         }
     }
 
     fun setTitle(title: String) {
         val current = _note.value ?: return
         if (current.title == title) return
+        rememberEdit(current)
         _note.value = current.copy(title = title, updatedAt = System.currentTimeMillis())
         scheduleSave()
     }
@@ -104,8 +123,17 @@ class EditorViewModel @Inject constructor(
     fun setDocument(document: NoteDocument) {
         val current = _note.value ?: return
         if (current.document == document) return
+        rememberEdit(current)
         _note.value = current.copy(document = document, updatedAt = System.currentTimeMillis())
         scheduleSave()
+    }
+
+    fun undo() {
+        restore(undoStack, redoStack)
+    }
+
+    fun redo() {
+        restore(redoStack, undoStack)
     }
 
     fun setBlockText(index: Int, text: String, marks: List<TextMark>) {
@@ -161,6 +189,34 @@ class EditorViewModel @Inject constructor(
 
     fun hasPin(): Boolean = settings.hasPin
 
+    private fun rememberEdit(current: Note) {
+        if (restoringHistory) return
+        undoStack.addLast(EditSnapshot(current.title, current.document))
+        while (undoStack.size > EDIT_HISTORY_LIMIT) undoStack.removeFirst()
+        redoStack.clear()
+        refreshHistory()
+    }
+
+    private fun restore(from: ArrayDeque<EditSnapshot>, onto: ArrayDeque<EditSnapshot>) {
+        val current = _note.value ?: return
+        val snapshot = from.removeLastOrNull() ?: return
+        onto.addLast(EditSnapshot(current.title, current.document))
+        restoringHistory = true
+        _note.value = current.copy(
+            title = snapshot.title,
+            document = snapshot.document,
+            updatedAt = System.currentTimeMillis(),
+        )
+        restoringHistory = false
+        refreshHistory()
+        scheduleSave()
+    }
+
+    private fun refreshHistory() {
+        _canUndo.value = undoStack.isNotEmpty()
+        _canRedo.value = redoStack.isNotEmpty()
+    }
+
     private fun scheduleSave() {
         val snapshot = _note.value ?: return
         saveJob?.cancel()
@@ -178,11 +234,13 @@ class EditorViewModel @Inject constructor(
     fun close(onDone: () -> Unit) {
         _unlocked.value = false
         saveJob?.cancel()
+        val snapshot = _note.value
+        val closingId = snapshot?.id
         viewModelScope.launch {
-            val snapshot = _note.value
             if (snapshot != null) {
                 if (isPristine(snapshot)) repository.delete(snapshot.id) else repository.save(snapshot)
             }
+            releaseIfCurrent(closingId)
             onDone()
         }
     }
@@ -194,8 +252,19 @@ class EditorViewModel @Inject constructor(
                 player.stop()
                 repository.delete(id)
             }
+            releaseIfCurrent(id)
             onDone()
         }
+    }
+
+    private fun releaseIfCurrent(id: Long?) {
+        if (id != null && boundId != id) return
+        loadJob?.cancel()
+        _note.value = null
+        boundId = -1
+        undoStack.clear()
+        redoStack.clear()
+        refreshHistory()
     }
 
     suspend fun abandonIfEmpty() {
@@ -213,6 +282,8 @@ class EditorViewModel @Inject constructor(
         }
         return noTables && noText
     }
+
+    private data class EditSnapshot(val title: String, val document: NoteDocument)
 
     enum class PinResult { OK, WRONG, RESET, MISSING }
 

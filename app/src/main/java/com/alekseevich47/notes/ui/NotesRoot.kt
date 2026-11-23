@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -169,13 +170,15 @@ fun NotesRoot(
                         modifier = Modifier.statusBarsPadding(),
                     )
                     Screen.EDITOR -> ui.editorId?.let { id ->
-                        EditorScreen(
-                            noteId = id,
-                            onBack = {
-                                shell.showList()
-                            },
-                            onToast = shell::toast,
-                        )
+                        key(id) {
+                            EditorScreen(
+                                noteId = id,
+                                onBack = {
+                                    shell.showList()
+                                },
+                                onToast = shell::toast,
+                            )
+                        }
                     }
                 }
             }

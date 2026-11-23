@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.VerticalAlignBottom
 import androidx.compose.material.icons.outlined.VerticalAlignCenter
@@ -60,6 +62,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
@@ -111,6 +114,7 @@ import kotlin.math.roundToInt
 private val TableBlue = Color(0xFF2F80ED)
 private val FillLight = Color(0xFFE7E5EC)
 private val FillDark = Color(0xFF2A2833)
+private val TableCorner = 10.dp
 
 private val AlignHorizontal = listOf(
     Icons.Outlined.FormatAlignLeft,
@@ -349,6 +353,8 @@ fun TableBlock(
             val colDp = colWidths.map { with(density) { it.toDp() } }
             val activeRow = active?.first
             val activeCol = active?.second
+            val tableScroll = rememberScrollState()
+            Box(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(start = 4.dp)) {
                 val gridHeight = rowBounds.lastOrNull()?.second ?: 0f
                 Box(Modifier.width(gutter).height(with(density) { gridHeight.toDp() })) {
@@ -396,7 +402,7 @@ fun TableBlock(
                         }
                     }
                 }
-                Column(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                Column(Modifier.weight(1f).horizontalScroll(tableScroll)) {
                     val spans = anchorSpans(
                         rowCount = rows.size,
                         colCount = width,
@@ -428,11 +434,19 @@ fun TableBlock(
                                     null -> false
                                 }
                                 val spanWidthPx = spanSize(span, colWidths, FloatArray(0)).first
+                                val shape = cellCornerShape(
+                                    topStart = span.row == 0 && span.col == 0,
+                                    topEnd = span.row == 0 && span.col + span.colSpan >= width,
+                                    bottomStart = span.row + span.rowSpan >= rows.size && span.col == 0,
+                                    bottomEnd = span.row + span.rowSpan >= rows.size &&
+                                        span.col + span.colSpan >= width,
+                                )
                                 TableCellEditor(
                                     table = table,
                                     row = span.row,
                                     col = span.col,
                                     width = with(density) { spanWidthPx.toDp() },
+                                    shape = shape,
                                     fillColor = fillColor,
                                     gridLine = gridLine,
                                     ink = ink,
@@ -465,11 +479,15 @@ fun TableBlock(
                             val left = colDp.take(col).fold(0.dp) { acc, dp -> acc + dp }
                             val cellW = colDp.getOrElse(col) { 0.dp }
                             if (menu == null && NoteTables.canInsertColumn(table)) {
-                                JunctionPlus(
-                                    stemEnd = false,
-                                    onClick = { onChange(NoteTables.insertColumn(table, col)) },
-                                    modifier = Modifier.offset(x = left - 11.dp, y = 4.dp),
-                                )
+                                // Column 0's left "+" sits 11.dp outside the scroll
+                                // and gets clipped. It is drawn on the overlay below.
+                                if (col != 0) {
+                                    JunctionPlus(
+                                        stemEnd = false,
+                                        onClick = { onChange(NoteTables.insertColumn(table, col)) },
+                                        modifier = Modifier.offset(x = left - 11.dp, y = 4.dp),
+                                    )
+                                }
                                 JunctionPlus(
                                     stemEnd = false,
                                     onClick = { onChange(NoteTables.insertColumn(table, col + 1)) },
@@ -477,7 +495,7 @@ fun TableBlock(
                                 )
                             }
                             Icon(
-                                Icons.Outlined.MoreVert,
+                                Icons.Outlined.MoreHoriz,
                                 contentDescription = "Столбец",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
@@ -492,7 +510,18 @@ fun TableBlock(
                             )
                         }
                     }
+                    }
                 }
+            if (activeCol == 0 && menu == null && NoteTables.canInsertColumn(table)) {
+                val shift = with(density) { tableScroll.value.toDp() }
+                JunctionPlus(
+                    stemEnd = false,
+                    onClick = { onChange(NoteTables.insertColumn(table, 0)) },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .offset(x = 4.dp + gutter - 11.dp - shift, y = (-4).dp),
+                )
+            }
             }
         }
         val open = menu
@@ -539,19 +568,13 @@ private fun MergedCellGrid(
         spans.forEachIndexed { index, span ->
             widths[index] = spanSize(span, colWidthsPx, FloatArray(0)).first
         }
-        val wrap = measurables.mapIndexed { index, measurable ->
+        // Probe content height without measure(): Compose forbids measuring the
+        // same Measurable twice in one pass (crash on insert).
+        val contentHeights = FloatArray(measurables.size) { index ->
             val widthPx = widths[index].roundToInt().coerceAtLeast(0)
-            measurable.measure(
-                Constraints(
-                    minWidth = widthPx,
-                    maxWidth = widthPx,
-                    minHeight = 0,
-                    maxHeight = Constraints.Infinity,
-                ),
-            )
+            measurables[index].minIntrinsicHeight(widthPx).toFloat()
         }
         val rowCount = spans.maxOfOrNull { it.row + it.rowSpan } ?: 0
-        val contentHeights = FloatArray(wrap.size) { wrap[it].height.toFloat() }
         val rowHeights = rowHeightsForSpans(rowCount, spans, contentHeights, minRowPx)
         if (!seen.heights.contentEquals(rowHeights)) {
             val snapshot = rowHeights.copyOf()
@@ -711,11 +734,27 @@ private fun JunctionPlus(stemEnd: Boolean, onClick: () -> Unit, modifier: Modifi
 }
 
 @Composable
+private fun cellCornerShape(
+    topStart: Boolean,
+    topEnd: Boolean,
+    bottomEnd: Boolean,
+    bottomStart: Boolean,
+): RoundedCornerShape {
+    return RoundedCornerShape(
+        topStart = if (topStart) TableCorner else 0.dp,
+        topEnd = if (topEnd) TableCorner else 0.dp,
+        bottomEnd = if (bottomEnd) TableCorner else 0.dp,
+        bottomStart = if (bottomStart) TableCorner else 0.dp,
+    )
+}
+
+@Composable
 private fun TableCellEditor(
     table: NoteTable,
     row: Int,
     col: Int,
     width: Dp,
+    shape: RoundedCornerShape,
     fillColor: Color,
     gridLine: Color,
     ink: Color,
@@ -792,14 +831,31 @@ private fun TableCellEditor(
         }
     }
     toolbar.onSelectionGestureBegan = { menuVisible = false }
+    val cellStyle = MaterialTheme.typography.bodyMedium.copy(
+        fontFamily = NotesFont,
+        color = ink,
+        textAlign = textAlign(h),
+    )
+    val spoiler = rememberSpoilerPaint(
+        text = field.text,
+        marks = marks,
+        style = cellStyle,
+        ink = ink,
+        widthPx = if (!hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }) {
+            layout?.size?.width ?: 0
+        } else {
+            0
+        },
+    )
     val pad = with(LocalDensity.current) { 8.dp.toPx() }
     val layoutState = androidx.compose.runtime.rememberUpdatedState(layout)
     Box(
         modifier = Modifier
             .width(width)
             .heightIn(min = 48.dp)
-            .background(if (filled) fillColor else Color.Transparent)
-            .border(borderWidth, borderColor)
+            .clip(shape)
+            .background(if (filled) fillColor else Color.Transparent, shape)
+            .border(borderWidth, borderColor, shape)
             .pointerInput(value, marks) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -852,17 +908,10 @@ private fun TableCellEditor(
                     .fillMaxWidth()
                     .onFocusChanged { state -> onFocused(state.isFocused) }
                     .drawWithContent {
-                        val result = layout
-                        if (!hiddenUnlocked && result != null && marks.any { it.style == MarkStyle.HIDDEN }) {
-                            drawSpoilerShadows(result, marks, ink)
-                        }
+                        if (!hiddenUnlocked) drawSpoilerShadows(spoiler, marks, ink)
                         drawContent()
                     },
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = NotesFont,
-                    color = ink,
-                    textAlign = textAlign(h),
-                ),
+                textStyle = cellStyle,
                 cursorBrush = SolidColor(NotesPurple),
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
