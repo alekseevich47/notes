@@ -40,7 +40,7 @@ class SelectionMenuPlacementTest {
         )
         val shortPlateWouldFitAbove = anchorTop + selectionTop - gap - 20 >= margin
         assertTrue(shortPlateWouldFitAbove)
-        assertEquals(selectionBottom.toInt() + gap + 18, topEdge(tallReserve))
+        assertEquals(selectionBottom.toInt() + gap, topEdge(tallReserve))
 
         val shortReserve = place(
             plate = IntSize(40, 400),
@@ -89,7 +89,7 @@ class SelectionMenuPlacementTest {
             right = 200f,
             window = IntSize(400, 800),
         )
-        assertEquals(20 + gap + 18, topEdge(topOfScreen))
+        assertEquals(20 + gap, topEdge(topOfScreen))
 
         val narrowWindow = IntSize(100, 800)
         val squeezed = place(
@@ -125,6 +125,59 @@ class SelectionMenuPlacementTest {
         assertEquals(200, centerX(shifted, 80))
     }
 
+    @Test
+    fun viewportKeepsThePlateOffTheHeaderAndPinsOffscreenSelections() {
+        val reserve = IntSize(80, 80)
+        val plate = IntSize(80, 40)
+        val middle = place(
+            plate = plate,
+            reserve = reserve,
+            top = 400f,
+            bottom = 430f,
+            left = 100f,
+            right = 180f,
+            viewportTop = 120,
+            viewportBottom = 900,
+        )
+        assertEquals(400 - gap, bottomEdge(middle, plate.height))
+
+        val underHeader = place(
+            plate = plate,
+            reserve = reserve,
+            top = 130f,
+            bottom = 150f,
+            left = 100f,
+            right = 180f,
+            viewportTop = 120,
+            viewportBottom = 900,
+        )
+        assertEquals(150 + gap, topEdge(underHeader))
+
+        val above = place(
+            plate = plate,
+            reserve = reserve,
+            top = 10f,
+            bottom = 40f,
+            left = 100f,
+            right = 180f,
+            viewportTop = 120,
+            viewportBottom = 900,
+        )
+        assertEquals(120 + margin, topEdge(above))
+
+        val below = place(
+            plate = plate,
+            reserve = reserve,
+            top = 940f,
+            bottom = 980f,
+            left = 100f,
+            right = 180f,
+            viewportTop = 120,
+            viewportBottom = 900,
+        )
+        assertEquals(900 - margin, bottomEdge(below, plate.height))
+    }
+
     private val anchorTop = 0
     private val anchor = IntRect(0, anchorTop, 1000, 2000)
 
@@ -137,6 +190,8 @@ class SelectionMenuPlacementTest {
         right: Float,
         window: IntSize = IntSize(1000, 2000),
         anchorBounds: IntRect = anchor,
+        viewportTop: Int = 0,
+        viewportBottom: Int = window.height,
     ): IntOffset {
         return placeSelectionMenu(
             anchorBounds = anchorBounds,
@@ -148,6 +203,8 @@ class SelectionMenuPlacementTest {
             marginPx = margin,
             shadowPadPx = shadow,
             reserve = reserve,
+            viewportTop = viewportTop,
+            viewportBottom = viewportBottom,
         )
     }
 

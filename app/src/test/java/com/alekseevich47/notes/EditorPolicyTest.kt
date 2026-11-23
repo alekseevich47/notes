@@ -5,6 +5,7 @@ import com.alekseevich47.notes.ui.notes.EditorPinCheck
 import com.alekseevich47.notes.ui.notes.EditorPins
 import com.alekseevich47.notes.ui.notes.lastEditedCaption
 import com.alekseevich47.notes.ui.notes.shouldClearFocusAfterImeHide
+import com.alekseevich47.notes.ui.notes.shouldDismissTableMenuOnImeHide
 import com.alekseevich47.notes.ui.editor.CellSpan
 import com.alekseevich47.notes.ui.editor.anchorSpans
 import com.alekseevich47.notes.ui.editor.cellLongPressOpensCellMenu
@@ -89,6 +90,38 @@ class EditorPolicyTest {
         assertFalse(shouldClearFocusAfterImeHide(wasShown = false, visible = false, dialogOpen = false))
         assertFalse(shouldClearFocusAfterImeHide(wasShown = true, visible = true, dialogOpen = false))
         assertFalse(shouldClearFocusAfterImeHide(wasShown = true, visible = false, dialogOpen = true))
+        assertFalse(
+            shouldClearFocusAfterImeHide(
+                wasShown = true,
+                visible = false,
+                dialogOpen = false,
+                tableMenuOpen = true,
+            ),
+        )
+        assertTrue(
+            shouldDismissTableMenuOnImeHide(
+                wasShown = true,
+                visible = false,
+                dialogOpen = false,
+                tableMenuOpen = true,
+            ),
+        )
+        assertFalse(
+            shouldDismissTableMenuOnImeHide(
+                wasShown = true,
+                visible = false,
+                dialogOpen = true,
+                tableMenuOpen = true,
+            ),
+        )
+        assertFalse(
+            shouldDismissTableMenuOnImeHide(
+                wasShown = true,
+                visible = false,
+                dialogOpen = false,
+                tableMenuOpen = false,
+            ),
+        )
     }
 
     @Test
