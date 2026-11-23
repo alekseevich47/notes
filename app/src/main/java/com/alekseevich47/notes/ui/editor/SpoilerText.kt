@@ -52,6 +52,17 @@ fun SpoilerPreview(
     modifier: Modifier = Modifier,
     maxLines: Int = 2,
 ) {
+    if (parts.none { it.hidden }) {
+        Text(
+            text = parts.joinToString(separator = "") { it.text },
+            color = color,
+            style = style,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = modifier,
+        )
+        return
+    }
     val annotated = remember(parts) { previewAnnotated(parts) }
     val marks = remember(parts) { previewMarks(parts) }
     SpoilerText(
