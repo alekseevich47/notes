@@ -42,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -52,6 +54,7 @@ import com.alekseevich47.notes.ui.components.DayRange
 import com.alekseevich47.notes.ui.components.LiquidGlassPlate
 import com.alekseevich47.notes.ui.components.formatDay
 import com.alekseevich47.notes.ui.editor.SpoilerPreview
+import com.alekseevich47.notes.ui.editor.noteCardContentDescription
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesMuted
 import com.alekseevich47.notes.ui.theme.NotesPurple
@@ -274,7 +277,13 @@ private fun NoteCard(
                 modifier = Modifier.padding(end = 4.dp),
             )
         }
-        Column(Modifier.weight(1f)) {
+        Column(
+            Modifier
+                .weight(1f)
+                .clearAndSetSemantics {
+                    contentDescription = noteCardContentDescription(note.title, note.preview)
+                },
+        ) {
         Text(note.title, style = MaterialTheme.typography.titleMedium, fontFamily = NotesFont, maxLines = 1, overflow = TextOverflow.Ellipsis)
         SpoilerPreview(
             parts = note.preview,

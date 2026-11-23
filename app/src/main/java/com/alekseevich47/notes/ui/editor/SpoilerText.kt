@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -60,6 +62,8 @@ fun SpoilerPreview(
     modifier: Modifier = Modifier,
     maxLines: Int = 2,
 ) {
+    val spoken = spoilerContentDescription(parts)
+    val semantics = Modifier.clearAndSetSemantics { contentDescription = spoken }
     if (parts.none { it.hidden }) {
         Text(
             text = parts.joinToString(separator = "") { it.text },
@@ -67,7 +71,7 @@ fun SpoilerPreview(
             style = style,
             maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
-            modifier = modifier,
+            modifier = modifier.then(semantics),
         )
         return
     }
@@ -79,9 +83,26 @@ fun SpoilerPreview(
         revealed = false,
         color = color,
         style = style,
-        modifier = modifier,
+        modifier = modifier.then(semantics),
         maxLines = maxLines,
     )
+}
+
+/**
+ * What a screen reader should say. Visible characters stay; each hidden run
+ * becomes one phrase, and repeated spaces collapse.
+ */
+internal fun spoilerContentDescription(parts: List<PreviewPart>): String {
+    val raw = buildString {
+        for (part in parts) {
+            if (part.hidden) append("скрытый текст") else append(part.text)
+        }
+    }
+    return raw.replace(Regex("\\s+"), " ").trim()
+}
+
+internal fun noteCardContentDescription(title: String, parts: List<PreviewPart>): String {
+    return (title + " " + spoilerContentDescription(parts)).replace(Regex("\\s+"), " ").trim()
 }
 
 @Composable
