@@ -1135,8 +1135,8 @@ object MarkEdits {
         val oldEnd = before.length - suffix
         val newEnd = after.length - suffix
         return marks.mapNotNull { mark ->
-            val start = mapIndex(mark.start, prefix, oldEnd, newEnd)
-            val end = mapIndex(mark.end, prefix, oldEnd, newEnd)
+            val start = mapStart(mark.start, prefix, oldEnd, newEnd)
+            val end = mapEnd(mark.end, prefix, oldEnd, newEnd)
             if (end > start) mark.copy(start = start, end = end) else null
         }
     }
@@ -1201,9 +1201,19 @@ object MarkEdits {
         return suffix
     }
 
-    private fun mapIndex(index: Int, start: Int, oldEnd: Int, newEnd: Int): Int {
+    /**
+     * Exclusive start. A pure insertion sitting exactly on the boundary moves
+     * the start forward, so the new characters stay outside the span.
+     */
+    private fun mapStart(index: Int, prefix: Int, oldEnd: Int, newEnd: Int): Int {
+        if (index == prefix && oldEnd == prefix) return newEnd
+        return mapEnd(index, prefix, oldEnd, newEnd)
+    }
+
+    /** Exclusive end. An insertion at [prefix] is already outside the span. */
+    private fun mapEnd(index: Int, prefix: Int, oldEnd: Int, newEnd: Int): Int {
         return when {
-            index <= start -> index
+            index <= prefix -> index
             index >= oldEnd -> index + (newEnd - oldEnd)
             else -> newEnd
         }
