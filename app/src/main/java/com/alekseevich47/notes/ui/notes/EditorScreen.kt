@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -113,6 +114,7 @@ fun EditorScreen(
     var pinError by remember { mutableStateOf<String?>(null) }
     var askTable by remember { mutableStateOf(false) }
     var pinStage by remember { mutableStateOf(HiddenPinStage.UNLOCK) }
+    var pinLockedUntil by remember { mutableLongStateOf(0L) }
     var draftPin by remember { mutableStateOf<String?>(null) }
     val formats = remember { NoteEditorController() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -165,6 +167,7 @@ fun EditorScreen(
         pinStage = if (viewModel.hasPin()) HiddenPinStage.UNLOCK else HiddenPinStage.CREATE
         draftPin = null
         pinError = null
+        pinLockedUntil = viewModel.pinLockDeadline()
         askPin = true
     }
 
@@ -448,6 +451,7 @@ fun EditorScreen(
                 HiddenPinStage.CONFIRM -> "Введите те же 4 цифры ещё раз"
             },
             error = pinError,
+            lockedUntilElapsed = if (pinStage == HiddenPinStage.UNLOCK) pinLockedUntil else 0L,
             onSubmit = { pin ->
                 when (pinStage) {
                     HiddenPinStage.CREATE -> {
@@ -487,7 +491,13 @@ fun EditorScreen(
                                 pinError = null
                                 onToast("PIN сброшен")
                             }
-                            EditorViewModel.PinResult.WRONG -> pinError = "Неверный PIN"
+                            EditorViewModel.PinResult.WRONG -> {
+                                pinError = "Неверный PIN"
+                                pinLockedUntil = viewModel.pinLockDeadline()
+                            }
+                            EditorViewModel.PinResult.LOCKED -> {
+                                pinLockedUntil = viewModel.pinLockDeadline()
+                            }
                             EditorViewModel.PinResult.MISSING -> {
                                 draftPin = null
                                 pinStage = HiddenPinStage.CREATE

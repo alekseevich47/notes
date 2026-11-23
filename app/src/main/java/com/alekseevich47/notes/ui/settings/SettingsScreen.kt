@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,6 +69,7 @@ fun SettingsScreen(
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
     var pinError by remember { mutableStateOf<String?>(null) }
+    var pinLockedUntil by remember { mutableLongStateOf(0L) }
     var changeStep by remember { mutableStateOf(ChangeStep.CURRENT) }
 
     Column(
@@ -166,10 +168,12 @@ fun SettingsScreen(
                 pinError = null
                 changeStep = ChangeStep.CURRENT
                 viewModel.clearPinVerified()
+                pinLockedUntil = viewModel.pinLockDeadline()
                 pinMode = PinMode.CHANGE
             }
             ActionText("Удалить PIN") {
                 pinError = null
+                pinLockedUntil = viewModel.pinLockDeadline()
                 pinMode = PinMode.CLEAR
             }
         }
@@ -225,10 +229,12 @@ fun SettingsScreen(
             }
             PinMode.CLEAR -> "Текущий PIN"
         }
+        val lockApplies = mode == PinMode.CLEAR || (mode == PinMode.CHANGE && changeStep == ChangeStep.CURRENT)
         PinDialog(
             title = title,
             subtitle = "4 цифры",
             error = pinError,
+            lockedUntilElapsed = if (lockApplies) pinLockedUntil else 0L,
             onSubmit = { value ->
                 when (mode) {
                     PinMode.CREATE -> {
@@ -261,8 +267,10 @@ fun SettingsScreen(
                             if (viewModel.verifyCurrentPin(value)) {
                                 changeStep = ChangeStep.NEW
                                 pinError = null
+                                pinLockedUntil = 0L
                             } else {
                                 pinError = "Неверный PIN"
+                                pinLockedUntil = viewModel.pinLockDeadline()
                             }
                         }
                         ChangeStep.NEW -> {
@@ -299,6 +307,7 @@ fun SettingsScreen(
                             onToast("PIN удалён")
                         } else {
                             pinError = "Неверный PIN"
+                            pinLockedUntil = viewModel.pinLockDeadline()
                         }
                     }
                 }

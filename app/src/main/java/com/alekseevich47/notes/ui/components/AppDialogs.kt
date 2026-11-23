@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.ui.components
 
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,10 +17,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -90,10 +94,25 @@ fun PinDialog(
     title: String,
     subtitle: String,
     error: String? = null,
+    lockedUntilElapsed: Long = 0L,
     onSubmit: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var digits by remember { mutableStateOf("") }
+    var nowElapsed by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(lockedUntilElapsed) {
+        while (true) {
+            val now = SystemClock.elapsedRealtime()
+            nowElapsed = now
+            val left = lockedUntilElapsed - now
+            if (left <= 0L) break
+            delay(minOf(1_000L, left))
+        }
+    }
+    val remainingMs = (lockedUntilElapsed - nowElapsed).coerceAtLeast(0L)
+    val locked = remainingMs > 0L
+    val seconds = ((remainingMs + 999L) / 1000L).toInt()
+    val message = if (locked) "Попробуйте через $seconds с" else error ?: subtitle
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             modifier = Modifier
@@ -107,9 +126,9 @@ fun PinDialog(
             Text(title, style = MaterialTheme.typography.titleLarge, fontFamily = NotesFont)
             Spacer(Modifier.height(6.dp))
             Text(
-                error ?: subtitle,
+                message,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (locked || error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(16.dp))
@@ -133,7 +152,8 @@ fun PinDialog(
                                 .size(width = 78.dp, height = 52.dp)
                                 .clip(RoundedCornerShape(16.dp))
                                 .background(if (key.isEmpty()) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable(enabled = key.isNotEmpty()) {
+                                .clickable(enabled = key.isNotEmpty() && !locked) {
+                                    if (locked) return@clickable
                                     digits = when (key) {
                                         "⌫" -> digits.dropLast(1)
                                         else -> if (digits.length < 4) digits + key else digits

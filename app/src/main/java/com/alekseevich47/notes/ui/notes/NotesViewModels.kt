@@ -1,9 +1,11 @@
 package com.alekseevich47.notes.ui.notes
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.alekseevich47.notes.data.repository.NotesRepository
 import com.alekseevich47.notes.data.secure.PinHasher
+import com.alekseevich47.notes.data.secure.PinThrottle
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.BlockKind
@@ -211,14 +213,26 @@ class EditorViewModel @Inject constructor(
     }
 
     fun unlock(pin: String): PinResult {
+        val now = SystemClock.elapsedRealtime()
+        val throttle = settings.loadPinThrottle(now)
+        if (PinThrottle.isLocked(throttle, now)) return PinResult.LOCKED
         return when (EditorPins.check(pin, settings.pinHash.value)) {
             EditorPinCheck.OK -> {
+                settings.savePinThrottle(PinThrottle.recordCorrect(throttle))
                 _unlocked.value = true
                 PinResult.OK
             }
-            EditorPinCheck.WRONG -> PinResult.WRONG
+            EditorPinCheck.WRONG -> {
+                settings.savePinThrottle(PinThrottle.recordWrong(throttle, now))
+                PinResult.WRONG
+            }
             EditorPinCheck.MISSING -> PinResult.MISSING
         }
+    }
+
+    fun pinLockDeadline(): Long {
+        val now = SystemClock.elapsedRealtime()
+        return settings.loadPinThrottle(now).lockedUntilElapsed
     }
 
     /**
@@ -394,7 +408,7 @@ class EditorViewModel @Inject constructor(
 
     data class CaretJump(val token: Int, val caret: BlockCaret)
 
-    enum class PinResult { OK, WRONG, RESET, MISSING }
+    enum class PinResult { OK, WRONG, RESET, MISSING, LOCKED }
 
     enum class PinSetup { SAVED, MISMATCH, RESET }
 }

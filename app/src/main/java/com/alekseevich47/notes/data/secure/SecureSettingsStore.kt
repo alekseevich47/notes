@@ -58,6 +58,46 @@ class SecureSettingsStore @Inject constructor(
         _pinHash.value = hash
     }
 
+    /**
+     * Failures, the elapsed-realtime deadline, and the boot id they belong to.
+     * A failed read of `/proc/sys/kernel/random/boot_id` is ignored, so a wall-clock
+     * change on the same boot cannot drop the lock.
+     */
+    fun loadPinThrottle(nowElapsed: Long): PinThrottleState {
+        val stored = PinThrottleState(
+            failures = prefs.getInt(KEY_PIN_FAILURES, 0).coerceAtLeast(0),
+            lockedUntilElapsed = prefs.getLong(KEY_PIN_LOCKED_UNTIL, 0L),
+        )
+        val storedBoot = prefs.getString(KEY_PIN_BOOT, "").orEmpty()
+        val read = readKernelBootId()
+        val aligned = PinThrottle.reconcile(stored, storedBoot, read, nowElapsed)
+        val currentBoot = PinThrottle.bootIdOrNull(read)
+        if (currentBoot != null && (aligned != stored || storedBoot != currentBoot)) {
+            persistPinThrottle(aligned, currentBoot)
+        }
+        return aligned
+    }
+
+    fun savePinThrottle(state: PinThrottleState) {
+        val boot = PinThrottle.bootIdOrNull(readKernelBootId())
+            ?: prefs.getString(KEY_PIN_BOOT, "").orEmpty()
+        persistPinThrottle(state, boot)
+    }
+
+    private fun persistPinThrottle(state: PinThrottleState, bootId: String) {
+        prefs.edit()
+            .putInt(KEY_PIN_FAILURES, state.failures)
+            .putLong(KEY_PIN_LOCKED_UNTIL, state.lockedUntilElapsed)
+            .putString(KEY_PIN_BOOT, bootId)
+            .commit()
+    }
+
+    private fun readKernelBootId(): String? {
+        return runCatching {
+            java.io.File("/proc/sys/kernel/random/boot_id").readText()
+        }.getOrNull()
+    }
+
     fun setTheme(mode: ThemeMode) {
         prefs.edit().putString(KEY_THEME, mode.name).apply()
         _theme.value = mode
@@ -123,5 +163,8 @@ class SecureSettingsStore @Inject constructor(
         const val PREFS_FALLBACK = "notes_secure_fallback"
         const val KEY_PIN = "pin_hash"
         const val KEY_THEME = "theme_mode"
+        const val KEY_PIN_FAILURES = "pin_failures"
+        const val KEY_PIN_LOCKED_UNTIL = "pin_locked_until_elapsed"
+        const val KEY_PIN_BOOT = "pin_boot_id"
     }
 }

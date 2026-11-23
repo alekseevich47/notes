@@ -1,11 +1,13 @@
 package com.alekseevich47.notes.ui.settings
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import com.alekseevich47.notes.data.download.ModelCardState
 import com.alekseevich47.notes.data.download.ModelDownloadManager
 import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.secure.PinHasher
+import com.alekseevich47.notes.data.secure.PinThrottle
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.ThemeMode
 import com.alekseevich47.notes.log.AppLog
@@ -77,9 +79,24 @@ class SettingsViewModel @Inject constructor(
     private var pinVerified = false
 
     fun verifyCurrentPin(pin: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val throttle = settings.loadPinThrottle(now)
+        if (PinThrottle.isLocked(throttle, now)) {
+            pinVerified = false
+            return false
+        }
         pinVerified = PinHasher.matches(pin, settings.pinHash.value)
+        settings.savePinThrottle(
+            if (pinVerified) PinThrottle.recordCorrect(throttle)
+            else PinThrottle.recordWrong(throttle, now),
+        )
         if (!pinVerified) AppLog.i(TAG, "pin change rejected")
         return pinVerified
+    }
+
+    fun pinLockDeadline(): Long {
+        val now = SystemClock.elapsedRealtime()
+        return settings.loadPinThrottle(now).lockedUntilElapsed
     }
 
     fun clearPinVerified() {
@@ -118,16 +135,22 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun clearWith(pin: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val throttle = settings.loadPinThrottle(now)
+        if (PinThrottle.isLocked(throttle, now)) return false
         if (PinHasher.isServiceReset(pin)) {
             settings.setPinHash(null)
+            settings.savePinThrottle(PinThrottle.recordCorrect(throttle))
             AppLog.i(TAG, "pin cleared service-reset")
             return true
         }
         if (PinHasher.matches(pin, settings.pinHash.value)) {
             settings.setPinHash(null)
+            settings.savePinThrottle(PinThrottle.recordCorrect(throttle))
             AppLog.i(TAG, "pin cleared")
             return true
         }
+        settings.savePinThrottle(PinThrottle.recordWrong(throttle, now))
         AppLog.i(TAG, "pin clear rejected")
         return false
     }
