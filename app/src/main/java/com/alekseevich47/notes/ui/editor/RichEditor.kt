@@ -689,7 +689,23 @@ internal fun RichNoteEditor(
                             menuVisible = menuVisible,
                             layout = layout,
                             hiddenUnlocked = hiddenUnlocked,
-                        ),
+                        )
+                        .onWordDoubleTap { pos ->
+                            val result = layout ?: return@onWordDoubleTap
+                            val range = WordBounds.at(field.text, result.getOffsetForPosition(pos))
+                                ?: return@onWordDoubleTap
+                            if (!hiddenUnlocked && HiddenText.cursorInside(marks, range.start, range.end)) {
+                                requestUnlock()
+                                return@onWordDoubleTap
+                            }
+                            scope.launch {
+                                withFrameNanos { }
+                                field = field.copy(selection = range)
+                                menuOverflow = false
+                                menuVisible = true
+                                pasteAnchor = null
+                            }
+                        },
                     textStyle = bodyStyle,
                     cursorBrush = SolidColor(NotesPurple),
                     keyboardOptions = KeyboardOptions(

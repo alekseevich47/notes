@@ -61,6 +61,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -802,6 +803,7 @@ private fun TableCellEditor(
         bridge.addBodyDownListener(clearPaste)
         onDispose { bridge.removeBodyDownListener(clearPaste) }
     }
+    val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val platformClipboard = LocalContext.current.getSystemService(ClipboardManager::class.java)
     val platformToolbar = LocalTextToolbar.current
@@ -994,7 +996,23 @@ private fun TableCellEditor(
                         menuVisible = menuVisible,
                         layout = layout,
                         hiddenUnlocked = hiddenUnlocked,
-                    ),
+                    )
+                    .onWordDoubleTap { pos ->
+                        val result = layout ?: return@onWordDoubleTap
+                        val range = WordBounds.at(field.text, result.getOffsetForPosition(pos))
+                            ?: return@onWordDoubleTap
+                        if (!hiddenUnlocked && HiddenText.cursorInside(marks, range.start, range.end)) {
+                            onRequestUnlock()
+                            return@onWordDoubleTap
+                        }
+                        scope.launch {
+                            withFrameNanos { }
+                            field = field.copy(selection = range)
+                            menuOverflow = false
+                            menuVisible = true
+                            pasteAnchor = null
+                        }
+                    },
                 textStyle = cellStyle,
                 cursorBrush = SolidColor(NotesPurple),
                 keyboardOptions = KeyboardOptions(
