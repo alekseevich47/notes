@@ -8,6 +8,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
+    id("androidx.baselineprofile")
 }
 
 val sherpaAarVersion = "2.0.1"
@@ -135,6 +136,11 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
+// Generation is a manual task. It is not part of assemble or CI.
+baselineProfile {
+    automaticGenerationDuringBuild = false
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
@@ -176,6 +182,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
     implementation("dev.chrisbanes.haze:haze:1.5.2")
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    baselineProfile(project(":baselineprofile"))
 
     implementation(files(sherpaAarFile))
 

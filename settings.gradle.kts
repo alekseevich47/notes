@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Notes"
 include(":app")
+include(":baselineprofile")
