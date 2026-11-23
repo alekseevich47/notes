@@ -7,6 +7,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
@@ -91,9 +92,16 @@ fun NotesTheme(
             controller.isAppearanceLightNavigationBars = !dark
         }
     }
-    MaterialTheme(
-        colorScheme = if (dark) DarkColors else LightColors,
-        typography = NotesTypography,
-        content = content,
-    )
+    val tier = rememberHardwarePerfTier()
+    val reduceMotion = currentReduceMotion()
+    CompositionLocalProvider(
+        LocalPerfTier provides tier,
+        LocalReduceMotion provides reduceMotion,
+    ) {
+        MaterialTheme(
+            colorScheme = if (dark) DarkColors else LightColors,
+            typography = NotesTypography,
+            content = content,
+        )
+    }
 }
