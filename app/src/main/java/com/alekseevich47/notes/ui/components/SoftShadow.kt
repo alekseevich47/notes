@@ -4,7 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import com.alekseevich47.notes.ui.theme.LocalPerfTier
+import com.alekseevich47.notes.ui.theme.PerfTier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -19,6 +21,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
@@ -41,9 +45,25 @@ fun softShadowRoom(elevation: Dp): Dp {
  * The fade stays inside the layout, so a popup window cannot clip it.
  * Draw happens outside the following clip.
  */
-fun Modifier.softShadowPadding(shape: Shape, color: Color, room: Dp): Modifier {
-    return drawBehind {
-        drawSoftShapeShadow(shape, color, room.toPx())
+fun softShadowSteps(tier: PerfTier): Int {
+    return if (tier == PerfTier.LOW) LowShadowSteps else NormalShadowSteps
+}
+
+/**
+ * [steps] comes from the call site. A plain modifier factory cannot read
+ * [LocalPerfTier] without the deprecated `composed` helper.
+ */
+fun Modifier.softShadowPadding(
+    shape: Shape,
+    color: Color,
+    room: Dp,
+    steps: Int = NormalShadowSteps,
+): Modifier {
+    return drawWithCache {
+        val built = buildSoftShadow(this, size, layoutDirection, shape, color, room.toPx(), steps)
+        onDrawBehind {
+            if (built != null) drawBuiltShadow(built)
+        }
     }.padding(room)
 }
 
@@ -61,6 +81,7 @@ fun SoftShadowLayer(
     modifier: Modifier = Modifier,
 ) {
     val padPx = with(LocalDensity.current) { room.roundToPx() }
+    val steps = softShadowSteps(LocalPerfTier.current)
     Canvas(
         modifier = modifier.layout { measurable, constraints ->
             if (!constraints.hasBoundedWidth || !constraints.hasBoundedHeight || padPx <= 0) {
@@ -74,9 +95,13 @@ fun SoftShadowLayer(
                 )
                 layout(width, height) { placeable.place(-padPx, -padPx) }
             }
+        }.drawWithCache {
+            val built = buildSoftShadow(this, size, layoutDirection, shape, color, padPx.toFloat(), steps)
+            onDrawBehind {
+                if (built != null) drawBuiltShadow(built)
+            }
         },
     ) {
-        drawSoftShapeShadow(shape, color, padPx.toFloat())
     }
 }
 
@@ -86,36 +111,156 @@ fun SoftShadowLayer(
  * a smoothstep down to 0 at [roomPx]. The plate interior is punched out so a
  * translucent fill above this shadow keeps its own color.
  */
-fun DrawScope.drawSoftShapeShadow(shape: Shape, color: Color, roomPx: Float) {
-    if (roomPx <= 1f || color.alpha <= 0f) return
+fun DrawScope.drawSoftShapeShadow(
+    shape: Shape,
+    color: Color,
+    roomPx: Float,
+    steps: Int = NormalShadowSteps,
+) {
+    val built = buildSoftShadow(this, size, layoutDirection, shape, color, roomPx, steps) ?: return
+    drawBuiltShadow(built)
+}
+
+private class BuiltShadow(
+    val knockout: Path,
+    val slices: List<ShadowSlice>,
+)
+
+private sealed class ShadowSlice {
+    abstract val color: Color
+
+    class Round(
+        override val color: Color,
+        val topLeft: Offset,
+        val size: Size,
+        val corner: CornerRadius,
+    ) : ShadowSlice()
+
+    class Fill(
+        override val color: Color,
+        val path: Path,
+    ) : ShadowSlice()
+
+    class Scaled(
+        override val color: Color,
+        val path: Path,
+        val roomPx: Float,
+        val sx: Float,
+        val sy: Float,
+        val pivot: Offset,
+    ) : ShadowSlice()
+}
+
+/**
+ * Outline, knockout, and one shape per shadow step. The draw lambda only fills
+ * these. Alphas still follow [shadowFalloff].
+ */
+private fun buildSoftShadow(
+    density: Density,
+    size: Size,
+    layoutDirection: LayoutDirection,
+    shape: Shape,
+    color: Color,
+    roomPx: Float,
+    steps: Int,
+): BuiltShadow? {
+    if (roomPx <= 1f || color.alpha <= 0f) return null
     val plateWidth = size.width - roomPx * 2f
     val plateHeight = size.height - roomPx * 2f
-    if (plateWidth <= 1f || plateHeight <= 1f) return
+    if (plateWidth <= 1f || plateHeight <= 1f) return null
+    val count = steps.coerceAtLeast(1)
     val plate = Size(plateWidth, plateHeight)
-    val outline = shape.createOutline(plate, layoutDirection, this)
+    val outline = shape.createOutline(plate, layoutDirection, density)
     // Tuck the knockout a pixel under the plate so the fade meets the fill
     // without a bright seam.
-    val plateClip = plateKnockout(outline, roomPx, tuck = 1.25f)
+    val knockout = plateKnockout(outline, roomPx, tuck = 1.25f)
     val peak = color.alpha
     val paint = color.copy(alpha = 1f)
+    val slices = ArrayList<ShadowSlice>(count)
     var covered = 0f
-    clipPath(plateClip, clipOp = ClipOp.Difference) {
-        for (step in ShadowSteps downTo 1) {
-            val innerT = (step - 1) / ShadowSteps.toFloat()
-            val outerT = step / ShadowSteps.toFloat()
-            val target = shadowFalloff(innerT) * peak
-            val delta = if (covered >= 0.98f) {
-                0f
-            } else {
-                ((target - covered) / (1f - covered)).coerceIn(0f, 1f)
+    for (step in count downTo 1) {
+        val innerT = (step - 1) / count.toFloat()
+        val outerT = step / count.toFloat()
+        val target = shadowFalloff(innerT) * peak
+        val delta = if (covered >= 0.98f) {
+            0f
+        } else {
+            ((target - covered) / (1f - covered)).coerceIn(0f, 1f)
+        }
+        covered = target
+        if (delta <= 0f) continue
+        slices += shadowSlice(outline, roomPx, spread = roomPx * outerT, color = paint.copy(alpha = delta))
+    }
+    return BuiltShadow(knockout, slices)
+}
+
+private fun DrawScope.drawBuiltShadow(built: BuiltShadow) {
+    clipPath(built.knockout, clipOp = ClipOp.Difference) {
+        for (slice in built.slices) {
+            when (slice) {
+                is ShadowSlice.Round -> drawRoundRect(
+                    color = slice.color,
+                    topLeft = slice.topLeft,
+                    size = slice.size,
+                    cornerRadius = slice.corner,
+                )
+                is ShadowSlice.Fill -> drawPath(slice.path, slice.color)
+                is ShadowSlice.Scaled -> translate(slice.roomPx, slice.roomPx) {
+                    scale(slice.sx, slice.sy, pivot = slice.pivot) {
+                        drawPath(slice.path, slice.color)
+                    }
+                }
             }
-            covered = target
-            if (delta <= 0f) continue
-            drawShadowCopy(
-                outline = outline,
+        }
+    }
+}
+
+private fun shadowSlice(outline: Outline, roomPx: Float, spread: Float, color: Color): ShadowSlice {
+    return when (outline) {
+        is Outline.Rounded -> {
+            val rect = outline.roundRect
+            val radius = rect.uniformCorner()
+            val width = rect.width + spread * 2f
+            val height = rect.height + spread * 2f
+            if (radius != null) {
+                ShadowSlice.Round(
+                    color = color,
+                    topLeft = Offset(rect.left + roomPx - spread, rect.top + roomPx - spread),
+                    size = Size(width, height),
+                    corner = CornerRadius(
+                        (radius.x + spread).coerceAtMost(width / 2f),
+                        (radius.y + spread).coerceAtMost(height / 2f),
+                    ),
+                )
+            } else {
+                ShadowSlice.Fill(color, rect.inflatedPath(roomPx, spread))
+            }
+        }
+        is Outline.Rectangle -> {
+            val rect = outline.rect
+            val width = rect.width + spread * 2f
+            val height = rect.height + spread * 2f
+            ShadowSlice.Round(
+                color = color,
+                topLeft = Offset(rect.left + roomPx - spread, rect.top + roomPx - spread),
+                size = Size(width, height),
+                corner = CornerRadius(
+                    spread.coerceAtMost(width / 2f),
+                    spread.coerceAtMost(height / 2f),
+                ),
+            )
+        }
+        is Outline.Generic -> {
+            val bounds = outline.path.getBounds()
+            val sx = (bounds.width + spread * 2f) / bounds.width.coerceAtLeast(1f)
+            val sy = (bounds.height + spread * 2f) / bounds.height.coerceAtLeast(1f)
+            ShadowSlice.Scaled(
+                color = color,
+                path = outline.path,
                 roomPx = roomPx,
-                spread = roomPx * outerT,
-                color = paint.copy(alpha = delta),
+                sx = sx,
+                sy = sy,
+                pivot = bounds.center,
             )
         }
     }
@@ -139,60 +284,13 @@ private fun plateKnockout(outline: Outline, roomPx: Float, tuck: Float): Path {
     }
 }
 
-private const val ShadowSteps = 40
+private const val NormalShadowSteps = 40
+private const val LowShadowSteps = 12
 
 /** 1 at the plate edge, 0 at the outer rim, flat at both ends. */
 private fun shadowFalloff(t: Float): Float {
     val u = (1f - t).coerceIn(0f, 1f)
     return u * u * (3f - 2f * u)
-}
-
-private fun DrawScope.drawShadowCopy(outline: Outline, roomPx: Float, spread: Float, color: Color) {
-    when (outline) {
-        is Outline.Rounded -> {
-            val rect = outline.roundRect
-            val radius = rect.uniformCorner()
-            val width = rect.width + spread * 2f
-            val height = rect.height + spread * 2f
-            if (radius != null) {
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(rect.left + roomPx - spread, rect.top + roomPx - spread),
-                    size = Size(width, height),
-                    cornerRadius = CornerRadius(
-                        (radius.x + spread).coerceAtMost(width / 2f),
-                        (radius.y + spread).coerceAtMost(height / 2f),
-                    ),
-                )
-            } else {
-                drawPath(rect.inflatedPath(roomPx, spread), color)
-            }
-        }
-        is Outline.Rectangle -> {
-            val rect = outline.rect
-            val width = rect.width + spread * 2f
-            val height = rect.height + spread * 2f
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(rect.left + roomPx - spread, rect.top + roomPx - spread),
-                size = Size(width, height),
-                cornerRadius = CornerRadius(
-                    spread.coerceAtMost(width / 2f),
-                    spread.coerceAtMost(height / 2f),
-                ),
-            )
-        }
-        is Outline.Generic -> {
-            val bounds = outline.path.getBounds()
-            val sx = (bounds.width + spread * 2f) / bounds.width.coerceAtLeast(1f)
-            val sy = (bounds.height + spread * 2f) / bounds.height.coerceAtLeast(1f)
-            translate(roomPx, roomPx) {
-                scale(sx, sy, pivot = bounds.center) {
-                    drawPath(outline.path, color)
-                }
-            }
-        }
-    }
 }
 
 private fun RoundRect.uniformCorner(): CornerRadius? {

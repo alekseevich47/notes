@@ -45,6 +45,8 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.alekseevich47.notes.ui.components.softShadowPadding
 import com.alekseevich47.notes.ui.components.softShadowRoom
+import com.alekseevich47.notes.ui.components.softShadowSteps
+import com.alekseevich47.notes.ui.theme.LocalPerfTier
 import com.alekseevich47.notes.ui.theme.NotesFont
 import kotlin.math.max
 import kotlin.math.min
@@ -112,6 +114,7 @@ fun SelectionActionsPopup(
                     shape = shape,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
                     room = shadowRoom,
+                    steps = softShadowSteps(LocalPerfTier.current),
                 )
                 .clip(shape)
                 .background(plate),
