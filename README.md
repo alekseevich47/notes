@@ -32,6 +32,8 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
 1. `testDebugUnitTest`
 2. `assembleDebug`
 3. артефакт `notes-debug-apk` (`app/build/outputs/apk/debug/*.apk`)
+4. `assembleOptimized`
+5. артефакт `notes-optimized-apk` (`app/build/outputs/apk/optimized/*.apk`)
 
 ## Тесты
 

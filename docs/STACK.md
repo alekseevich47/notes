@@ -54,4 +54,4 @@ PIN хранится только как SHA-256(pepper || pin) в EncryptedShar
 
 ## CI
 
-`.github/workflows/android.yml`: JDK 17, SDK 35, `testDebugUnitTest`, `assembleDebug`, артефакт `notes-debug-apk`.
+`.github/workflows/android.yml`: JDK 17, SDK 35, `testDebugUnitTest`, `assembleDebug`, `assembleOptimized`, артефакты `notes-debug-apk` и `notes-optimized-apk`.

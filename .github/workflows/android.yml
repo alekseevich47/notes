@@ -28,9 +28,19 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Assemble optimized APK
+        run: ./gradlew assembleOptimized --stacktrace
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: notes-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload optimized APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-optimized-apk
+          path: app/build/outputs/apk/optimized/*.apk
           if-no-files-found: error

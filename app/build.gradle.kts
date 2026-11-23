@@ -88,6 +88,14 @@ android {
             versionNameSuffix = "-debug"
             signingConfig = signingConfigs.getByName("debug")
         }
+        create("optimized") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-opt"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+        }
     }
 
     compileOptions {
