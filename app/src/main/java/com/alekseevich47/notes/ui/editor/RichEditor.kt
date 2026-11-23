@@ -545,14 +545,38 @@ internal fun RichNoteEditor(
                         listStart,
                         composing = next.composition != null,
                     )
-                    val selection = if (edit.text == next.text) next.selection else TextRange(edit.cursor)
-                    field = if (edit.text != next.text) {
-                        TextFieldValue(edit.text, selection, composition = null)
+                    val listedMarks = if (edit.text == previous) {
+                        marks
                     } else {
-                        next.copy(text = edit.text, selection = selection)
+                        MarkEdits.shift(marks, previous, edit.text)
+                    }
+                    val shortcut = if (
+                        next.composition == null &&
+                        (hiddenUnlocked || !HiddenText.cursorInside(marks, edit.cursor, edit.cursor))
+                    ) {
+                        MarkdownShortcuts.apply(
+                            text = edit.text,
+                            cursor = edit.cursor,
+                            marks = listedMarks,
+                            rejectLockedHidden = !hiddenUnlocked,
+                        )
+                    } else {
+                        null
+                    }
+                    val resolvedText = shortcut?.text ?: edit.text
+                    val resolvedCursor = (shortcut?.cursor ?: edit.cursor).coerceIn(0, resolvedText.length)
+                    val selection = when {
+                        shortcut != null -> TextRange(resolvedCursor)
+                        edit.text == next.text -> next.selection
+                        else -> TextRange(edit.cursor.coerceIn(0, edit.text.length))
+                    }
+                    field = if (resolvedText != next.text) {
+                        TextFieldValue(resolvedText, selection, composition = null)
+                    } else {
+                        next.copy(text = resolvedText, selection = selection)
                     }
                     fieldNow.current = field
-                    if (edit.text != previous) {
+                    if (resolvedText != previous) {
                         toolbar.suppressPlatform = false
                         releasePlatformMenu = false
                         if (blockFocused) pendingReveal = true
@@ -560,12 +584,15 @@ internal fun RichNoteEditor(
                     // The menu waits for finger-up. Compose asks the toolbar to show only
                     // after the selection gesture ends; showing here covers the magnifier.
                     if (selection.collapsed) hideMenu()
-                    val slice = textInsertion(previous, edit.text)
-                    val shifted = MarkEdits.shift(marks, previous, edit.text)
-                    var nextMarks = shifted
-                    var kind = EditHistory.kindForTextChange(previous, next.text, edit.text)
+                    val slice = if (shortcut == null) textInsertion(previous, resolvedText) else null
+                    var nextMarks = shortcut?.marks ?: listedMarks
+                    var kind = if (shortcut != null) {
+                        EditKind.STRUCTURE
+                    } else {
+                        EditHistory.kindForTextChange(previous, next.text, resolvedText)
+                    }
                     if (slice != null) {
-                        val pasted = RichClip.match(edit.text.substring(slice.start, slice.end))
+                        val pasted = RichClip.match(resolvedText.substring(slice.start, slice.end))
                         if (pasted != null) {
                             nextMarks = RichClip.overlay(nextMarks, slice.start, pasted)
                             kind = EditKind.STRUCTURE
@@ -574,7 +601,7 @@ internal fun RichNoteEditor(
                     if (
                         slice != null &&
                         previousSelection.collapsed &&
-                        previous.length + (slice.end - slice.start) == edit.text.length
+                        previous.length + (slice.end - slice.start) == resolvedText.length
                     ) {
                         nextMarks = MarkEdits.applyTyping(
                             nextMarks,
@@ -584,11 +611,11 @@ internal fun RichNoteEditor(
                             formats.pendingOff,
                         )
                     }
-                    if (edit.text == previous && selection != previousSelection) {
+                    if (resolvedText == previous && selection != previousSelection) {
                         clearPendingStyles()
                     }
                     onDocument(
-                        edit.text,
+                        resolvedText,
                         nextMarks,
                         kind,
                         previousSelection.end,
