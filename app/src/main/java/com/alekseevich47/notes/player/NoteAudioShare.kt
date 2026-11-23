@@ -11,8 +11,8 @@ import android.media.MediaMuxer
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.content.FileProvider
+import com.alekseevich47.notes.log.AppLog
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.Executors
@@ -47,7 +47,7 @@ object NoteAudioShare {
         }
         io.execute {
             runCatching { ensure(app, wavPath, noteId) }
-                .onFailure { error -> Log.e(TAG, "share prepare failed", error) }
+                .onFailure { error -> AppLog.e(TAG, "share prepare failed", error) }
             main.post(onReady)
         }
     }
@@ -57,14 +57,14 @@ object NoteAudioShare {
         val app = context.applicationContext
         io.execute {
             val file = runCatching { ensure(app, wavPath, noteId) }.getOrElse { error ->
-                Log.e(TAG, "share failed", error)
+                AppLog.e(TAG, "share failed", error)
                 null
             }
             main.post {
                 val ok = if (file == null) {
                     false
                 } else {
-                    runCatching { launch(context, file) }.onFailure { error -> Log.e(TAG, "share failed", error) }.isSuccess
+                    runCatching { launch(context, file) }.onFailure { error -> AppLog.e(TAG, "share failed", error) }.isSuccess
                 }
                 busy.set(false)
                 onFinished?.invoke(ok)

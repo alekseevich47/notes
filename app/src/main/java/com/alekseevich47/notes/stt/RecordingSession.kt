@@ -6,7 +6,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.SystemClock
-import android.util.Log
 import com.alekseevich47.notes.data.audio.Pcm
 import com.alekseevich47.notes.data.audio.SoftBeep
 import com.alekseevich47.notes.data.audio.WavWriter
@@ -90,6 +89,7 @@ class RecordingSession @Inject constructor(
         _noteId.value = null
         _text.value = ""
         _level.value = 0f
+        warnIfLowSpace()
         var noteId: Long? = null
         var audioBase: String? = null
         var startedAt = 0L
@@ -211,7 +211,6 @@ class RecordingSession @Inject constructor(
             _level.value = 0f
             pushWidgets()
         } catch (error: Throwable) {
-            Log.e(TAG, "recording failed", error)
             val elapsed = elapsedSince(startedAt)
             if (error is kotlinx.coroutines.CancellationException) {
                 AppLog.i(TAG, "phase IDLE cancelled durationMs=$elapsed")
@@ -246,7 +245,6 @@ class RecordingSession @Inject constructor(
                     owned = runCatching {
                         SherpaEngines.onlineTone(models.directory(ModelKind.T_ONE))
                     }.onFailure { error ->
-                        Log.e(TAG, "T-one load crashed", error)
                         AppLog.e(TAG, "tone load failed", error)
                     }.getOrNull()
                     val elapsed = elapsedSince(startedAt)
@@ -310,7 +308,6 @@ class RecordingSession @Inject constructor(
         if (!freezeLiveText && sharedTone != null) {
             val opened = runCatching { sharedTone.createStream() }
                 .onFailure { error ->
-                    Log.e(TAG, "T-one stream failed", error)
                     AppLog.e(TAG, "tone stream failed", error)
                 }
                 .getOrNull()
@@ -351,7 +348,6 @@ class RecordingSession @Inject constructor(
                     val reopened = runCatching { reopen(mic) }
                     if (reopened.isFailure) {
                         val error = reopened.exceptionOrNull()
-                        Log.e(TAG, "mic reopen failed", error)
                         AppLog.e(TAG, "mic reopen failed n=$reopens", error)
                         break
                     }
@@ -379,7 +375,6 @@ class RecordingSession @Inject constructor(
                             val opened = recognizer?.let { ready ->
                                 runCatching { ready.createStream() }
                                     .onFailure { error ->
-                                        Log.e(TAG, "T-one stream failed", error)
                                         AppLog.e(TAG, "tone stream failed", error)
                                     }
                                     .getOrNull()
@@ -490,7 +485,6 @@ class RecordingSession @Inject constructor(
             published = true
             if (endpoint) recognizer.reset(stream)
         }.onFailure { error ->
-            Log.e(TAG, "T-one decode stopped", error)
             AppLog.e(TAG, "tone decode stopped", error)
         }.isFailure
         val committedOut = if (failed && !published) committed else next.committed
@@ -575,7 +569,6 @@ class RecordingSession @Inject constructor(
                 }
             } catch (error: Throwable) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
-                Log.e(TAG, "GigaAM init crashed", error)
                 AppLog.e(TAG, "giga failed", error)
                 null
             }
@@ -593,7 +586,6 @@ class RecordingSession @Inject constructor(
             text.ifBlank { fallback }
         } catch (error: Throwable) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            Log.e(TAG, "GigaAM decode crashed", error)
             AppLog.e(TAG, "giga failed", error)
             fallback
         } finally {
@@ -619,10 +611,21 @@ class RecordingSession @Inject constructor(
         return if (startedAt == 0L) 0L else SystemClock.elapsedRealtime() - startedAt
     }
 
+    /** One stat of filesDir. Does not cancel the recording or walk model folders. */
+    private fun warnIfLowSpace() {
+        background.launch(Dispatchers.IO) {
+            val free = runCatching { context.filesDir.usableSpace }.getOrNull() ?: return@launch
+            if (free < LOW_SPACE_BYTES) {
+                AppLog.w(TAG, "low space freeMb=${free / (1024 * 1024)}")
+            }
+        }
+    }
+
     private companion object {
         const val TAG = "RecordingSession"
         const val SAMPLE_RATE = 16_000
         const val WARMUP_BYTES = SAMPLE_RATE / 10 * 2
         const val BEEP_GAP_MS = 80L
+        const val LOW_SPACE_BYTES = 100L * 1024L * 1024L
     }
 }

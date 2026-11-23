@@ -44,6 +44,26 @@ class AppLogTest {
             locale = "ru-RU",
             versionName = "1.0.4-debug",
             versionCode = 5,
+            buildType = "debug",
+            debuggable = true,
+            pid = 4242,
+            memoryClass = 256,
+            lowRam = false,
+            totalMemMb = 3814,
+            availMemMb = 1200,
+            freeDiskMb = 2048,
+            perfTier = "NORMAL",
+            toneInstalled = true,
+            toneEnabled = false,
+            gigaInstalled = false,
+            gigaEnabled = true,
+            recognizer = "tone",
+            warmupOnBoot = true,
+            micGranted = true,
+            notificationsGranted = false,
+            batteryOptIgnored = true,
+            timezone = "UTC",
+            theme = "DARK",
         )
         val text = lines.joinToString("\n")
         assertTrue(text.contains("manufacturer=Google"))
@@ -58,6 +78,26 @@ class AppLogTest {
         assertTrue(text.contains("locale=ru-RU"))
         assertTrue(text.contains("versionName=1.0.4-debug"))
         assertTrue(text.contains("versionCode=5"))
+        assertTrue(text.contains("buildType=debug"))
+        assertTrue(text.contains("debuggable=true"))
+        assertTrue(text.contains("pid=4242"))
+        assertTrue(text.contains("memoryClass=256"))
+        assertTrue(text.contains("lowRam=false"))
+        assertTrue(text.contains("totalMemMb=3814"))
+        assertTrue(text.contains("availMemMb=1200"))
+        assertTrue(text.contains("freeDiskMb=2048"))
+        assertTrue(text.contains("perfTier=NORMAL"))
+        assertTrue(text.contains("toneInstalled=true"))
+        assertTrue(text.contains("toneEnabled=false"))
+        assertTrue(text.contains("gigaInstalled=false"))
+        assertTrue(text.contains("gigaEnabled=true"))
+        assertTrue(text.contains("recognizer=tone"))
+        assertTrue(text.contains("warmupOnBoot=true"))
+        assertTrue(text.contains("micGranted=true"))
+        assertTrue(text.contains("notificationsGranted=false"))
+        assertTrue(text.contains("batteryOptIgnored=true"))
+        assertTrue(text.contains("timezone=UTC"))
+        assertTrue(text.contains("theme=DARK"))
         assertFalse(text.contains("http"))
         assertFalse(text.contains("/"))
         lines.forEach { line -> assertEquals(line, AppLog.sanitize(line)) }

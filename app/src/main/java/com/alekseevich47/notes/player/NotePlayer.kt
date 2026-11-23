@@ -9,9 +9,11 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.exoplayer.ExoPlayer
+import com.alekseevich47.notes.log.AppLog
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,6 +123,7 @@ class NotePlayer @Inject constructor(
     fun play(noteId: Long, path: String, title: String) = onMain {
         val file = File(path)
         if (!file.isFile) {
+            AppLog.w("NotePlayer", "start failed id=$noteId")
             active = false
             commandedPlaying = false
             replaying = false
@@ -184,6 +187,7 @@ class NotePlayer @Inject constructor(
             commandedPlaying = true
             transportPausedAt = 0L
             player.play()
+            AppLog.i("NotePlayer", "start id=$noteId")
             publish(noteId, title, seekOverrideMs = if (replay) 0L else null)
         } finally {
             armingPlay = false
@@ -215,6 +219,7 @@ class NotePlayer @Inject constructor(
         commandedPlaying = true
         transportPausedAt = 0L
         player.play()
+        AppLog.i("NotePlayer", "start id=${_state.value.noteId ?: -1}")
         publish(seekOverrideMs = if (replay) 0L else null)
     }
 
@@ -222,6 +227,7 @@ class NotePlayer @Inject constructor(
         commandedPlaying = false
         replaying = false
         player.pause()
+        AppLog.i("NotePlayer", "pause id=${noteId ?: -1}")
         publish(noteId, title)
     }
 
@@ -231,6 +237,7 @@ class NotePlayer @Inject constructor(
         val duration = if (holdDuration) 0L else PlaybackSnapshot.knownDuration(player.duration)
         val target = PlaybackSnapshot.seekTarget(player.currentPosition, deltaMs, duration)
         player.seekTo(target)
+        AppLog.i("NotePlayer", "seek id=${_state.value.noteId ?: -1}")
         publish(seekOverrideMs = target)
     }
 
@@ -244,17 +251,23 @@ class NotePlayer @Inject constructor(
             return@onMain
         }
         player.seekTo(target)
+        AppLog.i("NotePlayer", "seek id=${_state.value.noteId ?: -1}")
         publish(seekOverrideMs = target)
     }
 
     fun stop() = onMain {
+        val id = _state.value.noteId
+        val playing = active
         releaseSession()
         audioPath = null
         _state.value = PlayerUi()
         notifyListeners()
+        if (playing || id != null) AppLog.i("NotePlayer", "stop id=${id ?: -1}")
     }
 
     fun release() = onMain {
+        val id = _state.value.noteId
+        val playing = active
         releaseSession()
         applyingMedia = false
         audioPath = null
@@ -263,6 +276,7 @@ class NotePlayer @Inject constructor(
         player?.release()
         _state.value = PlayerUi()
         notifyListeners()
+        if (playing) AppLog.i("NotePlayer", "stop id=${id ?: -1}")
     }
 
     private fun releaseSession() {
@@ -317,9 +331,16 @@ class NotePlayer @Inject constructor(
                     }
 
                     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                        if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
+                            AppLog.w("NotePlayer", "audio focus lost id=${_state.value.noteId ?: -1}")
+                        }
                         // Notification and headset pause land here, often without ACTION_TOGGLE.
                         if (applyingMedia || !active) return
                         publish()
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        AppLog.e("NotePlayer", "player error id=${_state.value.noteId ?: -1}", error)
                     }
 
                     override fun onPositionDiscontinuity(

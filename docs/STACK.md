@@ -52,6 +52,10 @@ PIN хранится только как SHA-256(pepper || pin) в EncryptedShar
 - `RecordingService` — FGS `microphone`, wake lock, уведомление «заметка готова» открывает note id.
 - `PlaybackService` — ExoPlayer, MediaSession, FGS `mediaPlayback`, play/pause и seek ±10 с. В заметке свой мини-плеер.
 
+## Журнал
+
+Логи — только через `AppLog`, `android.util.Log` в коде приложения не использовать (зеркало внутри `AppLog` — исключение).
+
 ## CI
 
 `.github/workflows/android.yml`: JDK 17, SDK 35, `testDebugUnitTest`, `assembleDebug`, `assembleOptimized`, артефакты `notes-debug-apk` и `notes-optimized-apk`.

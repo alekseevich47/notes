@@ -38,12 +38,16 @@ class RecordingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
     private var wake: PowerManager.WakeLock? = null
+    private var userStop = false
+    private var finished = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                userStop = true
+                AppLog.i("RecordingService", "stop reason=ACTION_STOP")
                 session.requestStop()
                 return START_STICKY
             }
@@ -56,6 +60,7 @@ class RecordingService : Service() {
         }
         if (!hasMicPermission()) {
             AppLog.i("RecordingService", "mic permission denied")
+            AppLog.i("RecordingService", "stop reason=missing permission")
             openAppForPermission()
             stopSelf()
             return START_NOT_STICKY
@@ -91,6 +96,7 @@ class RecordingService : Service() {
                 if (noteId != null) {
                     notifyReady(noteId)
                 }
+                finished = true
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -99,6 +105,9 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
+        if (job?.isActive == true && !userStop && !finished) {
+            AppLog.w("RecordingService", "stop reason=process killed")
+        }
         releaseWake()
         scope.cancel()
         super.onDestroy()

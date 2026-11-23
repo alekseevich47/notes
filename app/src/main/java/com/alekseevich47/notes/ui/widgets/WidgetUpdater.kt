@@ -18,6 +18,7 @@ import android.widget.RemoteViews
 import com.alekseevich47.notes.MainActivity
 import com.alekseevich47.notes.R
 import com.alekseevich47.notes.domain.MicPhase
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.RecordingService
 import java.io.File
 
@@ -174,17 +175,25 @@ object WidgetUpdater {
         val smallIds = manager.getAppWidgetIds(ComponentName(context, NotesWidgetSmall::class.java))
         val wideIds = manager.getAppWidgetIds(ComponentName(context, NotesWidgetWide::class.java))
         smallIds.forEach { id ->
-            manager.updateAppWidget(id, smallViews(context, id, loading))
-            bound += id
+            try {
+                manager.updateAppWidget(id, smallViews(context, id, loading))
+                bound += id
+            } catch (error: Exception) {
+                AppLog.e("Widget", "update failed type=small", error)
+            }
         }
         var flushed = full
         wideIds.forEach { id ->
             val force = full || id !in bound || widePartials >= WIDE_FLUSH
             val views = wideViews(context, id, live = live, bindClicks = force)
             if (force) {
-                manager.updateAppWidget(id, views)
-                bound += id
-                flushed = true
+                try {
+                    manager.updateAppWidget(id, views)
+                    bound += id
+                    flushed = true
+                } catch (error: Exception) {
+                    AppLog.e("Widget", "update failed type=wide", error)
+                }
             } else {
                 manager.partiallyUpdateAppWidget(id, views)
             }

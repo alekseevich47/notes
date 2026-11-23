@@ -173,14 +173,15 @@ class ModelDownloadManager @Inject constructor(
                     return@withContext DownloadOutcome.STOPPED
                 }
                 attempt++
+                val detail = failureDetail(kind, error)
                 if (attempt >= 5) {
                     val message = error.message ?: "Сеть прервалась"
                     publish(kind, DownloadStatus.FAILED, currentProgress(kind), message)
                     writeStatus(kind, DownloadStatus.FAILED, message)
-                    AppLog.e(TAG, "fail $kind", error)
+                    AppLog.e(TAG, "fail $detail", error)
                     return@withContext if (error is IOException) DownloadOutcome.RETRY else DownloadOutcome.FAILED
                 }
-                AppLog.w(TAG, "retry $kind attempt=$attempt ${error.javaClass.simpleName}")
+                AppLog.w(TAG, "retry $detail attempt=$attempt")
                 kotlinx.coroutines.delay(700L * attempt)
             }
         }
@@ -430,7 +431,45 @@ class ModelDownloadManager @Inject constructor(
         totalSidecar(partial).delete()
     }
 
+    /** Class, HTTP status, kind, and sizes. The URL stays out of this line. */
+    private fun failureDetail(kind: ModelKind, error: Throwable): String {
+        val (bytes, total) = transferSizes(kind)
+        return "kind=$kind class=${error.javaClass.simpleName} http=${httpCode(error)} bytes=$bytes total=$total"
+    }
+
+    private fun httpCode(error: Throwable): String {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 4) {
+            val code = HTTP_CODE.find(current.message.orEmpty())?.groupValues?.getOrNull(1)
+            if (code != null) return code
+            current = current.cause
+            depth++
+        }
+        return "-"
+    }
+
+    private fun transferSizes(kind: ModelKind): Pair<Long, Long> {
+        val dir = directory(kind)
+        var downloaded = 0L
+        var total = 0L
+        var known = true
+        ModelCatalog.files(kind).forEach { spec ->
+            val finalFile = File(dir, spec.name)
+            val partial = File(dir, spec.name + ".partial")
+            downloaded += when {
+                finalFile.isFile -> finalFile.length()
+                partial.exists() -> partial.length()
+                else -> 0L
+            }
+            val specTotal = if (finalFile.isFile) finalFile.length() else readTotal(partial)
+            if (specTotal == null) known = false else total += specTotal
+        }
+        return downloaded to if (known) total else -1L
+    }
+
     private companion object {
         const val TAG = "ModelDownload"
+        val HTTP_CODE = Regex("""HTTP\s+(\d{3})""")
     }
 }

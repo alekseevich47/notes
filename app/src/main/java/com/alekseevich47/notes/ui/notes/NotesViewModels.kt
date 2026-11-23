@@ -8,6 +8,7 @@ import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.PinThrottle
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.BlockCaret
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.domain.BlockKind
 import com.alekseevich47.notes.domain.EditHistory
 import com.alekseevich47.notes.domain.EditKind
@@ -22,6 +23,7 @@ import com.alekseevich47.notes.player.NotePlayer
 import com.alekseevich47.notes.player.PlayerUi
 import com.alekseevich47.notes.ui.components.DayRange
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
@@ -134,6 +136,7 @@ class EditorViewModel @Inject constructor(
             if (boundId == id) {
                 lastSaved = loaded?.note
                 savedGen = editGen
+                AppLog.i("Editor", "editor open id=$id unreadable=${_unreadable.value}")
             }
         }
     }
@@ -318,6 +321,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun flush() {
+        AppLog.i("Editor", "flush on stop")
         debounceJob?.cancel()
         debounceJob = null
         if (_unreadable.value) return
@@ -327,6 +331,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun close(onDone: () -> Unit) {
+        AppLog.i("Editor", "editor close id=${_note.value?.id ?: boundId}")
         _unlocked.value = false
         debounceJob?.cancel()
         debounceJob = null
@@ -366,7 +371,14 @@ class EditorViewModel @Inject constructor(
             if (_unreadable.value) return@withLock
             if (generation < savedGen) return@withLock
             if (snapshot == lastSaved) return@withLock
-            repository.save(snapshot)
+            try {
+                repository.save(snapshot)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                AppLog.e("Editor", "save failed id=${snapshot.id}", error)
+                throw error
+            }
             if (snapshot.id == boundId && generation >= savedGen) {
                 lastSaved = snapshot
                 savedGen = generation

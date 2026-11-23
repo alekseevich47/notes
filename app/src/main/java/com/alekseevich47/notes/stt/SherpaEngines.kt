@@ -1,6 +1,6 @@
 package com.alekseevich47.notes.stt
 
-import android.util.Log
+import com.alekseevich47.notes.log.AppLog
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -39,7 +39,7 @@ object SherpaEngines {
             decodingMethod = "greedy_search",
         )
         OnlineRecognizer(assetManager = null, config = config)
-    }.onFailure { Log.e(TAG, "T-one init failed", it) }.getOrNull()
+    }.onFailure { AppLog.e(TAG, "T-one init failed", it) }.getOrNull()
 
     fun offlineGiga(modelDir: File): OfflineRecognizer? = runCatching {
         val encoder = File(modelDir, "encoder.int8.onnx")
@@ -64,7 +64,7 @@ object SherpaEngines {
             decodingMethod = "greedy_search",
         )
         OfflineRecognizer(assetManager = null, config = config)
-    }.onFailure { Log.e(TAG, "GigaAM init failed", it) }.getOrNull()
+    }.onFailure { AppLog.e(TAG, "GigaAM init failed", it) }.getOrNull()
 
     fun transcribeFile(recognizer: OfflineRecognizer, wavPath: String): String = runCatching {
         val wave = WaveReader.readWave(wavPath)
@@ -76,5 +76,5 @@ object SherpaEngines {
         } finally {
             stream.release()
         }
-    }.onFailure { Log.e(TAG, "GigaAM decode failed", it) }.getOrDefault("")
+    }.onFailure { AppLog.e(TAG, "GigaAM decode failed", it) }.getOrDefault("")
 }

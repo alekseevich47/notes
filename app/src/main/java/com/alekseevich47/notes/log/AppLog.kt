@@ -129,13 +129,54 @@ object AppLog {
         locale: String,
         versionName: String,
         versionCode: Int,
+        buildType: String? = null,
+        debuggable: Boolean? = null,
+        pid: Int? = null,
+        memoryClass: Int? = null,
+        lowRam: Boolean? = null,
+        totalMemMb: Long? = null,
+        availMemMb: Long? = null,
+        freeDiskMb: Long? = null,
+        perfTier: String? = null,
+        toneInstalled: Boolean? = null,
+        toneEnabled: Boolean? = null,
+        gigaInstalled: Boolean? = null,
+        gigaEnabled: Boolean? = null,
+        recognizer: String? = null,
+        warmupOnBoot: Boolean? = null,
+        micGranted: Boolean? = null,
+        notificationsGranted: Boolean? = null,
+        batteryOptIgnored: Boolean? = null,
+        timezone: String? = null,
+        theme: String? = null,
     ): List<String> {
-        return listOf(
+        val lines = mutableListOf(
             "onCreate manufacturer=$manufacturer brand=$brand model=$model device=$device",
             "android release=$release sdk=$sdk incremental=$incremental",
             "android display=$display",
             "abis=$abis locale=$locale versionName=$versionName versionCode=$versionCode",
         )
+        buildType?.let { lines += "buildType=$it" }
+        debuggable?.let { lines += "debuggable=$it" }
+        pid?.let { lines += "pid=$it" }
+        memoryClass?.let { lines += "memoryClass=$it" }
+        lowRam?.let { lines += "lowRam=$it" }
+        totalMemMb?.let { lines += "totalMemMb=$it" }
+        availMemMb?.let { lines += "availMemMb=$it" }
+        freeDiskMb?.let { lines += "freeDiskMb=$it" }
+        perfTier?.let { lines += "perfTier=$it" }
+        toneInstalled?.let { lines += "toneInstalled=$it" }
+        toneEnabled?.let { lines += "toneEnabled=$it" }
+        gigaInstalled?.let { lines += "gigaInstalled=$it" }
+        gigaEnabled?.let { lines += "gigaEnabled=$it" }
+        recognizer?.let { lines += "recognizer=$it" }
+        warmupOnBoot?.let { lines += "warmupOnBoot=$it" }
+        micGranted?.let { lines += "micGranted=$it" }
+        notificationsGranted?.let { lines += "notificationsGranted=$it" }
+        batteryOptIgnored?.let { lines += "batteryOptIgnored=$it" }
+        timezone?.let { lines += "timezone=$it" }
+        theme?.let { lines += "theme=$it" }
+        return lines
     }
 
     fun i(tag: String, message: String) = write("I", tag, message, null)
@@ -311,4 +352,35 @@ object AppLog {
         }
         return null
     }
+}
+
+/** Body line that separates one process from the next. No note text. */
+internal fun processMarker(pid: Int, session: Int): String {
+    return "===== process start pid=$pid session=$session ====="
+}
+
+/**
+ * Stable name for `ApplicationExitInfo` reason codes. The integers are the
+ * public API values (stubs do not inline them). Call only on API 30+.
+ * Unknown codes keep the numeric value.
+ */
+internal fun exitReasonName(code: Int): String = when (code) {
+    0 -> "UNKNOWN" // REASON_UNKNOWN
+    1 -> "EXIT_SELF" // REASON_EXIT_SELF
+    2 -> "SIGNALED" // REASON_SIGNALED
+    3 -> "LOW_MEMORY" // REASON_LOW_MEMORY
+    4 -> "CRASH" // REASON_CRASH
+    5 -> "CRASH_NATIVE" // REASON_CRASH_NATIVE
+    6 -> "ANR" // REASON_ANR
+    7 -> "INITIALIZATION_FAILURE" // REASON_INITIALIZATION_FAILURE
+    8 -> "PERMISSION_CHANGE" // REASON_PERMISSION_CHANGE
+    9 -> "EXCESSIVE_RESOURCE_USAGE" // REASON_EXCESSIVE_RESOURCE_USAGE
+    10 -> "USER_REQUESTED" // REASON_USER_REQUESTED
+    11 -> "USER_STOPPED" // REASON_USER_STOPPED
+    12 -> "DEPENDENCY_DIED" // REASON_DEPENDENCY_DIED
+    13 -> "OTHER" // REASON_OTHER
+    14 -> "FREEZER" // REASON_FREEZER
+    15 -> "PACKAGE_STATE_CHANGE" // REASON_PACKAGE_STATE_CHANGE
+    16 -> "PACKAGE_UPDATED" // REASON_PACKAGE_UPDATED
+    else -> "REASON_$code"
 }

@@ -16,6 +16,8 @@ object NotesPrefs {
     const val RECOGNIZER_SYSTEM = "system"
     const val SEARCH_INDEX_V2 = "search_index_v2"
     const val THEME_MODE = "theme_mode"
+    const val LOG_SESSION = "log_session"
+    const val LAST_EXIT_LOGGED_TS = "last_exit_logged_ts"
 
     fun open(context: Context): SharedPreferences {
         return context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)

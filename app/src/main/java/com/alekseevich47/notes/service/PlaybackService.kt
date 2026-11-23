@@ -14,6 +14,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaStyleNotificationHelper
 import com.alekseevich47.notes.MainActivity
 import com.alekseevich47.notes.R
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.player.NotePlayer
 import com.alekseevich47.notes.player.NotificationPost
 import com.alekseevich47.notes.player.PlaybackSnapshot
@@ -42,10 +43,14 @@ class PlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         AppChannels.ensure(this)
-        session = MediaSession.Builder(this, notePlayer.player())
-            .setId("notes-playback")
-            .setSessionActivity(openPending(null))
-            .build()
+        session = runCatching {
+            MediaSession.Builder(this, notePlayer.player())
+                .setId("notes-playback")
+                .setSessionActivity(openPending(null))
+                .build()
+        }.onFailure { error ->
+            AppLog.e("Playback", "MediaSession failed", error)
+        }.getOrNull()
         notePlayer.addListener(refresh)
     }
 
@@ -75,7 +80,9 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         posted = null
         notePlayer.removeListener(refresh)
-        session?.release()
+        runCatching { session?.release() }.onFailure { error ->
+            AppLog.e("Playback", "MediaSession failed", error)
+        }
         session = null
         notePlayer.release()
         scope.cancel()
