@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.alekseevich47.notes.data.download.ModelKind
+import com.alekseevich47.notes.log.AppLog
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +19,7 @@ class SecureSettingsStore @Inject constructor(
 ) {
     private val appContext = context.applicationContext
     private val prefs: SharedPreferences = openSecurePrefs(context)
+    private val recognizerWrite = Any()
     private val _pinHash = MutableStateFlow(prefs.getString(KEY_PIN, null))
     private val _modelEnabled = MutableStateFlow(readModelFlags())
     private val _warmupOnBoot = MutableStateFlow(prefs.getBoolean(NotesPrefs.WARMUP_ON_BOOT, false))
@@ -102,10 +104,23 @@ class SecureSettingsStore @Inject constructor(
     }
 
     fun setRecognizer(value: String) {
-        val stored = NotesPrefs.recognizerOf(value)
-        prefs.edit().putString(NotesPrefs.RECOGNIZER, stored).commit()
-        _recognizer.value = stored
-        mirrorWidgetPrefs()
+        synchronized(recognizerWrite) {
+            val stored = NotesPrefs.recognizerOf(value)
+            prefs.edit().putString(NotesPrefs.RECOGNIZER, stored).commit()
+            _recognizer.value = stored
+            mirrorWidgetPrefs()
+        }
+    }
+
+    /** Rewrites a stored choice that names T-one while the model cannot run. */
+    fun normalizeRecognizer(toneUsable: Boolean) {
+        synchronized(recognizerWrite) {
+            val stored = prefs.getString(NotesPrefs.RECOGNIZER, null)
+            val value = RecognizerChoice.effective(stored, toneUsable)
+            if (value == _recognizer.value) return
+            setRecognizer(value)
+            AppLog.i("Settings", "recognizer normalized -> $value toneUsable=$toneUsable")
+        }
     }
 
     private fun mirrorWidgetPrefs() {

@@ -34,7 +34,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -66,6 +69,7 @@ fun SettingsScreen(
     val warmup by viewModel.warmupOnBoot.collectAsStateWithLifecycle()
     val warmupAvailable = viewModel.warmupAvailable
     val recognizer by viewModel.recognizer.collectAsStateWithLifecycle()
+    val toneUsable by viewModel.toneUsable.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pinMode by remember { mutableStateOf<PinMode?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
@@ -136,10 +140,18 @@ fun SettingsScreen(
             style = MaterialTheme.typography.bodyMedium,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThemeChip(SettingsCopy.RECOGNIZER_TONE, recognizer == NotesPrefs.RECOGNIZER_TONE) {
-                viewModel.setRecognizer(NotesPrefs.RECOGNIZER_TONE)
+            ThemeChip(
+                SettingsCopy.RECOGNIZER_TONE,
+                selected = recognizer == NotesPrefs.RECOGNIZER_TONE && toneUsable,
+                enabled = toneUsable,
+            ) {
+                if (toneUsable) viewModel.setRecognizer(NotesPrefs.RECOGNIZER_TONE)
+                else onToast("Сначала скачайте T-one ниже")
             }
-            ThemeChip(SettingsCopy.RECOGNIZER_SYSTEM, recognizer == NotesPrefs.RECOGNIZER_SYSTEM) {
+            ThemeChip(
+                SettingsCopy.RECOGNIZER_SYSTEM,
+                recognizer == NotesPrefs.RECOGNIZER_SYSTEM || !toneUsable,
+            ) {
                 viewModel.setRecognizer(NotesPrefs.RECOGNIZER_SYSTEM)
             }
         }
@@ -348,13 +360,20 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun ThemeChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Text(
         label,
         modifier = Modifier
+            .then(if (enabled) Modifier else Modifier.alpha(0.4f))
             .clip(RoundedCornerShape(16.dp))
             .background(if (selected) NotesPurple else MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
+            .then(if (enabled) Modifier else Modifier.semantics { disabled() })
             .padding(horizontal = 12.dp, vertical = 8.dp),
         color = if (selected) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onSurface,
         fontFamily = NotesFont,

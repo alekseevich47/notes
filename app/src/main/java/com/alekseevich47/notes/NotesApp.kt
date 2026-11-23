@@ -7,12 +7,15 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration
 import com.alekseevich47.notes.data.download.ModelDownloadManager
+import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.repository.NotesRepository
+import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.service.AppChannels
 import com.alekseevich47.notes.service.ModelWarmupService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -22,6 +25,7 @@ class NotesApp : Application(), Configuration.Provider {
     @Inject lateinit var downloads: ModelDownloadManager
     @Inject lateinit var applicationScope: CoroutineScope
     @Inject lateinit var notes: NotesRepository
+    @Inject lateinit var settings: SecureSettingsStore
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -50,6 +54,11 @@ class NotesApp : Application(), Configuration.Provider {
         })
         AppChannels.ensure(this)
         downloads.recoverInterrupted()
+        applicationScope.launch(Dispatchers.IO) {
+            settings.normalizeRecognizer(
+                downloads.isInstalled(ModelKind.T_ONE) && settings.isModelEnabled(ModelKind.T_ONE),
+            )
+        }
     }
 
     private fun installCrashHandler() {

@@ -4,9 +4,12 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.alekseevich47.notes.data.download.DownloadStatus
 import com.alekseevich47.notes.data.download.ModelCardState
 import com.alekseevich47.notes.data.download.ModelDownloadManager
 import com.alekseevich47.notes.data.download.ModelKind
+import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.data.secure.PinThrottle
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
@@ -18,7 +21,15 @@ import com.alekseevich47.notes.service.OemPowerSettings
 import com.alekseevich47.notes.service.WarmupGate
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
@@ -39,6 +50,25 @@ class SettingsViewModel @Inject constructor(
     val modelEnabled: StateFlow<Map<ModelKind, Boolean>> = settings.modelEnabled
     val warmupOnBoot: StateFlow<Boolean> = settings.warmupOnBoot
     val recognizer: StateFlow<String> = settings.recognizer
+    val toneUsable: StateFlow<Boolean> = combine(models, modelEnabled) { cards, enabled ->
+        toneReady(cards, enabled)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        downloads.isInstalled(ModelKind.T_ONE) && settings.isModelEnabled(ModelKind.T_ONE),
+    )
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            downloads.cards
+                .map { cards -> cards.firstOrNull { it.kind == ModelKind.T_ONE }?.status }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    settings.normalizeRecognizer(toneUsableNow())
+                }
+        }
+    }
 
     fun setTheme(mode: ThemeMode) {
         val previous = theme.value
@@ -64,22 +94,43 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setRecognizer(value: String) {
+        if (value == NotesPrefs.RECOGNIZER_TONE && !toneUsable.value) return
         settings.setRecognizer(value)
         AppLog.i(TAG, "recognizer ${settings.recognizer.value}")
     }
 
     fun startDownload(kind: ModelKind) = downloads.start(kind)
     fun pauseDownload(kind: ModelKind) = downloads.pause(kind)
-    fun stopDownload(kind: ModelKind) = downloads.stop(kind)
+    fun stopDownload(kind: ModelKind) {
+        downloads.stop(kind)
+        if (kind == ModelKind.T_ONE) normalizeToneChoice()
+    }
 
     fun setModelEnabled(kind: ModelKind, enabled: Boolean) {
         settings.setModelEnabled(kind, enabled)
         AppLog.i(TAG, if (enabled) "model enable $kind" else "model disable $kind")
+        if (kind == ModelKind.T_ONE) normalizeToneChoice()
     }
 
     fun deleteModel(kind: ModelKind) {
         downloads.deleteInstalled(kind)
         settings.clearModelEnabled(kind)
+        if (kind == ModelKind.T_ONE) normalizeToneChoice()
+    }
+
+    private fun normalizeToneChoice() {
+        viewModelScope.launch(Dispatchers.IO) {
+            settings.normalizeRecognizer(toneUsableNow())
+        }
+    }
+
+    private fun toneUsableNow(): Boolean = toneReady(models.value, modelEnabled.value)
+
+    private fun toneReady(cards: List<ModelCardState>, enabled: Map<ModelKind, Boolean>): Boolean {
+        val installed = cards.any { card ->
+            card.kind == ModelKind.T_ONE && card.status == DownloadStatus.INSTALLED
+        }
+        return installed && enabled[ModelKind.T_ONE] != false
     }
 
     /**
