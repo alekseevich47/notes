@@ -59,10 +59,6 @@ import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesMuted
 import com.alekseevich47.notes.ui.theme.NotesPurple
 import dev.chrisbanes.haze.HazeState
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 @Composable
 fun NotesListScreen(
@@ -293,7 +289,7 @@ private fun NoteCard(
             modifier = Modifier.padding(top = 4.dp),
         )
         Text(
-            formatStamp(note.updatedAt),
+            formatStamp(note.createdAt),
             style = MaterialTheme.typography.labelMedium,
             color = NotesMuted,
             modifier = Modifier.padding(top = 6.dp),
@@ -304,12 +300,4 @@ private fun NoteCard(
 
 private fun rangeLabel(range: DayRange): String {
     return if (range.start == range.end) formatDay(range.start) else formatDay(range.start) + " — " + formatDay(range.end)
-}
-
-private val stampZone: ZoneId = ZoneId.systemDefault()
-private val stampFormatter: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("d MMM, HH:mm", Locale.forLanguageTag("ru"))
-
-private fun formatStamp(epoch: Long): String {
-    return stampFormatter.format(Instant.ofEpochMilli(epoch).atZone(stampZone))
 }

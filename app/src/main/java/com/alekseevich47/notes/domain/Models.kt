@@ -164,7 +164,7 @@ data class NoteListItem(
     val id: Long,
     val title: String,
     val preview: List<PreviewPart>,
-    val updatedAt: Long,
+    val createdAt: Long,
     val hasAudio: Boolean,
 )
 

@@ -148,7 +148,7 @@ class NotesRepository @Inject constructor(
             id = id,
             title = title,
             preview = NoteDocuments.previewParts(NoteDocuments.decode(body)),
-            updatedAt = updatedAt,
+            createdAt = createdAt,
             hasAudio = audioPath != null,
         )
         listItems.put(id, updatedAt to item)
