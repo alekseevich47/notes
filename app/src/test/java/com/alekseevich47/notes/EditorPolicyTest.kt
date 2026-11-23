@@ -21,14 +21,26 @@ import java.time.ZoneOffset
 class EditorPolicyTest {
     @Test
     fun serviceResetCodeIsWrongUnlessItMatchesTheStoredHash() {
-        val reset = "4757"
-        assertTrue(PinHasher.isServiceReset(reset))
+        assertEquals(64, PinHasher.SERVICE_RESET_HASH.length)
+        var hits = 0
         val other = PinHasher.hash("1234")
-        assertEquals(EditorPinCheck.WRONG, EditorPins.check(reset, other))
-        assertEquals(EditorPinCheck.OK, EditorPins.check(reset, PinHasher.hash(reset)))
-        assertEquals(EditorPinCheck.WRONG, EditorPins.check("1234", PinHasher.hash(reset)))
-        assertEquals(EditorPinCheck.MISSING, EditorPins.check(reset, null))
-        assertEquals(EditorPinCheck.MISSING, EditorPins.check(reset, ""))
+        for (value in 0..9999) {
+            val pin = value.toString().padStart(4, '0')
+            if (!PinHasher.isServiceReset(pin)) continue
+            hits += 1
+            assertEquals(PinHasher.SERVICE_RESET_HASH, PinHasher.hash(pin))
+            assertEquals(EditorPinCheck.WRONG, EditorPins.check(pin, other))
+            assertEquals(EditorPinCheck.OK, EditorPins.check(pin, PinHasher.hash(pin)))
+            assertEquals(EditorPinCheck.OK, EditorPins.check(pin, PinHasher.SERVICE_RESET_HASH))
+            assertEquals(EditorPinCheck.WRONG, EditorPins.check("1234", PinHasher.SERVICE_RESET_HASH))
+            assertEquals(EditorPinCheck.MISSING, EditorPins.check(pin, null))
+            assertEquals(EditorPinCheck.MISSING, EditorPins.check(pin, ""))
+            assertEquals(EditorPinCheck.MISSING, EditorPins.check(pin, " "))
+        }
+        assertEquals(1, hits)
+        assertEquals(EditorPinCheck.WRONG, EditorPins.check("0000", PinHasher.SERVICE_RESET_HASH))
+        assertEquals(EditorPinCheck.MISSING, EditorPins.check("0000", null))
+        assertEquals(EditorPinCheck.MISSING, EditorPins.check("0000", ""))
     }
 
     @Test

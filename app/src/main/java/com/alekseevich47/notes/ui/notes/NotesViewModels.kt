@@ -237,7 +237,7 @@ class EditorViewModel @Inject constructor(
 
     /**
      * Create-PIN step used when hidden text is opened before a PIN exists.
-     * 4757 is stored like any other four digits. Reset stays in Settings.
+     * Any four digits are stored the same way. Reset stays in Settings.
      */
     fun saveCreatedPin(first: String, second: String): PinSetup {
         if (first.length != 4 || first != second || first.any { it !in '0'..'9' }) return PinSetup.MISMATCH
