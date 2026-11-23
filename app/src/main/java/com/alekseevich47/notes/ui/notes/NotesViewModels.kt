@@ -18,6 +18,7 @@ import com.alekseevich47.notes.ui.components.DayRange
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +28,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.ZoneId
 import javax.inject.Inject
 
@@ -87,8 +90,12 @@ class EditorViewModel @Inject constructor(
     val playerUi: StateFlow<PlayerUi> = player.state
 
     private var boundId: Long = -1
-    private var saveJob: kotlinx.coroutines.Job? = null
+    private var debounceJob: kotlinx.coroutines.Job? = null
     private var loadJob: kotlinx.coroutines.Job? = null
+    private var lastSaved: Note? = null
+    private var editGen = 0L
+    private var savedGen = 0L
+    private val saveMutex = Mutex()
     private val undoStack = ArrayDeque<EditSnapshot>()
     private val redoStack = ArrayDeque<EditSnapshot>()
     private var restoringHistory = false
@@ -114,6 +121,10 @@ class EditorViewModel @Inject constructor(
             if (boundId != id) return@launch
             _note.value = loaded?.note
             _unreadable.value = loaded?.unreadable == true
+            if (boundId == id) {
+                lastSaved = loaded?.note
+                savedGen = editGen
+            }
         }
     }
 
@@ -229,29 +240,40 @@ class EditorViewModel @Inject constructor(
     private fun scheduleSave() {
         if (_unreadable.value) return
         val snapshot = _note.value ?: return
-        saveJob?.cancel()
-        saveJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(280)
-            if (_unreadable.value) return@launch
-            repository.save(snapshot)
+        editGen += 1
+        val generation = editGen
+        debounceJob?.cancel()
+        // Delay only. A newer keystroke cancels the wait and must not cancel a write already in flight.
+        debounceJob = viewModelScope.launch {
+            delay(280)
+            viewModelScope.launch { saveIfNeeded(snapshot, generation) }
         }
     }
 
     fun flush() {
+        debounceJob?.cancel()
+        debounceJob = null
         if (_unreadable.value) return
         val snapshot = _note.value ?: return
-        viewModelScope.launch { repository.save(snapshot) }
+        val generation = editGen
+        viewModelScope.launch { saveIfNeeded(snapshot, generation) }
     }
 
     fun close(onDone: () -> Unit) {
         _unlocked.value = false
-        saveJob?.cancel()
+        debounceJob?.cancel()
+        debounceJob = null
         val snapshot = _note.value
         val closingId = snapshot?.id
         val blocked = _unreadable.value
+        val generation = editGen
         viewModelScope.launch {
             if (snapshot != null && !blocked) {
-                if (isPristine(snapshot)) repository.delete(snapshot.id) else repository.save(snapshot)
+                if (isPristine(snapshot)) {
+                    saveMutex.withLock { repository.delete(snapshot.id) }
+                } else {
+                    saveIfNeeded(snapshot, generation)
+                }
             }
             releaseIfCurrent(closingId)
             onDone()
@@ -259,14 +281,29 @@ class EditorViewModel @Inject constructor(
     }
 
     fun delete(onDone: () -> Unit) {
+        debounceJob?.cancel()
+        debounceJob = null
         val id = _note.value?.id
         viewModelScope.launch {
             if (id != null) {
                 player.stop()
-                repository.delete(id)
+                saveMutex.withLock { repository.delete(id) }
             }
             releaseIfCurrent(id)
             onDone()
+        }
+    }
+
+    private suspend fun saveIfNeeded(snapshot: Note, generation: Long) {
+        saveMutex.withLock {
+            if (_unreadable.value) return@withLock
+            if (generation < savedGen) return@withLock
+            if (snapshot == lastSaved) return@withLock
+            repository.save(snapshot)
+            if (snapshot.id == boundId && generation >= savedGen) {
+                lastSaved = snapshot
+                savedGen = generation
+            }
         }
     }
 

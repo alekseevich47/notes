@@ -70,25 +70,28 @@ class NotesRepository @Inject constructor(
 
     suspend fun save(note: Note) {
         val current = dao.get(note.id) ?: return
-        if (
-            NoteDocuments.sameStored(
-                storedTitle = current.title,
-                storedBody = current.body,
-                storedAudio = current.audioPath,
-                title = note.title,
-                document = note.document,
-                audioPath = note.audioPath,
-            )
-        ) {
-            return
-        }
-        val updated = current.copy(
-            title = note.title,
-            body = NoteDocuments.encode(note.document),
-            searchBlob = NoteDocuments.searchBlob(note.title, note.document),
-            audioPath = note.audioPath,
-            updatedAt = System.currentTimeMillis(),
-        )
+        val updated = withContext(Dispatchers.Default) {
+            if (
+                NoteDocuments.sameStored(
+                    storedTitle = current.title,
+                    storedBody = current.body,
+                    storedAudio = current.audioPath,
+                    title = note.title,
+                    document = note.document,
+                    audioPath = note.audioPath,
+                )
+            ) {
+                null
+            } else {
+                current.copy(
+                    title = note.title,
+                    body = NoteDocuments.encode(note.document),
+                    searchBlob = NoteDocuments.searchBlob(note.title, note.document),
+                    audioPath = note.audioPath,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            }
+        } ?: return
         dao.update(updated)
     }
 

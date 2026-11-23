@@ -40,6 +40,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -136,6 +138,9 @@ fun EditorScreen(
     }
     val context = LocalContext.current
 
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        viewModel.flush()
+    }
     LaunchedEffect(noteId) {
         formats.bodyFocused = false
         caretRequest = CaretRequest()
