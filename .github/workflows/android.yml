@@ -31,6 +31,13 @@ jobs:
       - name: Assemble optimized APK
         run: ./gradlew assembleOptimized --stacktrace
 
+      - name: Upload optimized mapping
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-optimized-mapping
+          path: app/build/outputs/mapping/optimized/mapping.txt
+          if-no-files-found: error
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

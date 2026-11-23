@@ -59,3 +59,5 @@ PIN хранится только как SHA-256(pepper || pin) в EncryptedShar
 ## CI
 
 `.github/workflows/android.yml`: JDK 17, SDK 35, `testDebugUnitTest`, `assembleDebug`, `assembleOptimized`, артефакты `notes-debug-apk` и `notes-optimized-apk`.
+
+Стеки optimized расшифровываются командой `retrace mapping.txt trace.txt` (R8 retrace из cmdline-tools); mapping — артефакт `notes-optimized-mapping`.

@@ -1,6 +1,7 @@
 package com.alekseevich47.notes
 
 import com.alekseevich47.notes.log.AppLog
+import com.alekseevich47.notes.log.processMarker
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -201,7 +202,17 @@ class AppLogTest {
             "err note-3.wav",
             AppLog.sanitize("err /data/user/0/com.app/files/recordings/note-3.wav"),
         )
-        assertEquals("HTTP 404 [url]", AppLog.sanitize("HTTP 404 https://example.com/model.onnx?token=secret"))
+        assertEquals(
+            "HTTP 404 [url example.com]",
+            AppLog.sanitize("HTTP 404 https://example.com/model.onnx?token=secret"),
+        )
+        assertEquals(
+            "[url huggingface.co]",
+            AppLog.sanitize("https://huggingface.co/some/path?q=1"),
+        )
+        assertEquals("[url example.com:8443]", AppLog.sanitize("https://example.com:8443/a?q=1"))
+        assertEquals("[url example.com]", AppLog.sanitize("https://user:secret@example.com/hidden"))
+        assertEquals("[url]", AppLog.sanitize("http:///no-host/path"))
         assertEquals("pin ****", AppLog.sanitize("pin 1234"))
         assertEquals("pin set", AppLog.sanitize("pin set"))
         assertFalse(AppLog.sanitize("pin 9876 saved").contains("9876"))
@@ -223,6 +234,55 @@ class AppLogTest {
         assertTrue(text.contains("note-9.wav"))
         assertTrue(text.contains("****"))
         assertTrue(text.contains("IllegalStateException"))
+    }
+
+    @Test
+    fun processMarkerNamesPidAndSession() {
+        assertEquals("===== process start pid=42 session=7 =====", processMarker(42, 7))
+    }
+
+    @Test
+    fun renderErrorKeepsCauseFramesAndDoesNotCutThem() {
+        fun frame(className: String, method: String, line: Int): StackTraceElement {
+            return StackTraceElement(className, method, "F.kt", line)
+        }
+        val fifth = IllegalStateException("level-5")
+        fifth.stackTrace = arrayOf(frame("com.app.C5", "only5", 50))
+        val fourth = IllegalStateException("level-4", fifth)
+        fourth.stackTrace = Array(8) { index -> frame("com.app.C4", "m$index", 40 + index) }
+        val third = IllegalStateException("level-3", fourth)
+        third.stackTrace = arrayOf(frame("com.app.C3", "m3", 30))
+        val second = IllegalStateException("level-2", third)
+        second.stackTrace = arrayOf(frame("com.app.C2", "m2", 20))
+        val firstCause = IllegalStateException("see https://huggingface.co/some/path?q=1", second)
+        firstCause.stackTrace = arrayOf(frame("com.app.C1", "m1", 10))
+        val longMethod = "m".repeat(280)
+        val top = IllegalStateException("я".repeat(300), firstCause)
+        top.stackTrace = Array(30) { index ->
+            frame("com.app.Top", if (index == 0) longMethod else "t$index", index + 1)
+        }
+        val suppressed = IllegalStateException("suppressed-message")
+        suppressed.stackTrace = arrayOf(frame("com.app.Sup", "hidden", 9))
+        top.addSuppressed(suppressed)
+
+        AppLog.e("T", "failed", top)
+        val text = File(dir, "app.log").readText()
+        assertTrue(text.contains("com.app.Top.$longMethod:1"))
+        assertTrue(text.contains("com.app.Top.t23:24"))
+        assertFalse(text.contains("com.app.Top.t24"))
+        assertTrue(text.contains("com.app.C1.m1:10"))
+        assertTrue(text.contains("com.app.C4.m0:40"))
+        assertTrue(text.contains("com.app.C4.m5:45"))
+        assertFalse(text.contains("com.app.C4.m6"))
+        assertFalse(text.contains("com.app.C5"))
+        assertFalse(text.contains("level-5"))
+        assertTrue(text.contains("[url huggingface.co]"))
+        assertFalse(text.contains("some/path"))
+        assertFalse(text.contains("q=1"))
+        assertTrue(text.contains("suppressed java.lang.IllegalStateException: suppressed-message"))
+        assertFalse(text.contains("com.app.Sup.hidden"))
+        assertTrue(text.contains("…[truncated]"))
+        assertFalse(text.contains("я".repeat(300)))
     }
 
     @Test

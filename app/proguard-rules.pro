@@ -17,3 +17,6 @@
 -dontwarn javax.annotation.**
 -dontwarn okhttp3.**
 -dontwarn org.conscrypt.**
+
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

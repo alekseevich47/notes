@@ -216,15 +216,39 @@ object AppLog {
     }
 
     internal fun sanitize(raw: String): String {
+        val text = redact(raw)
+        if (text.length > MAX_MESSAGE) return text.take(MAX_MESSAGE) + "…[truncated]"
+        return text
+    }
+
+    /** Paths, URLs, and PIN digits. Does not apply [MAX_MESSAGE], so stack frames stay whole. */
+    private fun redact(raw: String): String {
         var text = raw.replace(Regex("[\\r\\n\\t]+"), " ").trim()
-        text = URL.replace(text, "[url]")
+        text = URL.replace(text) { match -> urlToken(match.value) }
         text = ABS_PATH.replace(text) { match ->
             val base = match.value.substringAfterLast('/')
             if ('.' in base) base else "[path]"
         }
         text = PIN_DIGITS.replace(text) { match -> match.groupValues[1] + "****" }
-        if (text.length > MAX_MESSAGE) text = text.take(MAX_MESSAGE) + "…[truncated]"
         return text
+    }
+
+    /** Host only. A missing host stays `[url]` and is not replaced with a guessed name. */
+    private fun urlToken(rawUrl: String): String {
+        val marker = "://"
+        val scheme = rawUrl.indexOf(marker)
+        if (scheme < 0) return "[url]"
+        val rest = rawUrl.substring(scheme + marker.length)
+        var cut = rest.length
+        val slash = rest.indexOf('/')
+        val query = rest.indexOf('?')
+        val hash = rest.indexOf('#')
+        if (slash >= 0) cut = minOf(cut, slash)
+        if (query >= 0) cut = minOf(cut, query)
+        if (hash >= 0) cut = minOf(cut, hash)
+        val host = rest.substring(0, cut).substringAfterLast('@')
+        if (host.isBlank()) return "[url]"
+        return "[url $host]"
     }
 
     private fun write(level: String, tag: String, message: String, error: Throwable?) {
@@ -315,22 +339,34 @@ object AppLog {
     }
 
     private fun renderError(error: Throwable): String {
-        val lines = ArrayList<String>(12)
+        val lines = ArrayList<String>(48)
         val seen = HashSet<Throwable>()
         var current: Throwable? = error
         var depth = 0
-        while (current != null && depth < 4 && seen.add(current)) {
+        while (current != null && depth <= 4 && seen.add(current)) {
             val detail = current.message?.let(::sanitize).orEmpty()
             lines += if (detail.isBlank()) current.javaClass.name else "${current.javaClass.name}: $detail"
-            if (depth == 0) {
-                current.stackTrace.take(8).forEach { frame ->
-                    lines += "  at ${frame.className}.${frame.methodName}:${frame.lineNumber}"
+            val frameLimit = if (depth == 0) 24 else 6
+            current.stackTrace.take(frameLimit).forEach { frame ->
+                lines += renderFrame(frame)
+            }
+            current.suppressed.forEach { suppressed ->
+                val suppressedDetail = suppressed.message?.let(::sanitize).orEmpty()
+                lines += if (suppressedDetail.isBlank()) {
+                    "suppressed ${suppressed.javaClass.name}"
+                } else {
+                    "suppressed ${suppressed.javaClass.name}: $suppressedDetail"
                 }
             }
             current = current.cause
             depth++
         }
         return lines.joinToString("\n")
+    }
+
+    private fun renderFrame(frame: StackTraceElement): String {
+        val body = redact("${frame.className}.${frame.methodName}:${frame.lineNumber}")
+        return "  at $body"
     }
 
     private fun mirrorLogcat(level: String, tag: String, message: String) {
