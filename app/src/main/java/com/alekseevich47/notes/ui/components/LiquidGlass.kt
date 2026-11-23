@@ -86,12 +86,14 @@ fun LiquidGlassPlate(
     shape: Shape = RoundedCornerShape(LiquidGlassTokens.Corner),
     elevation: Dp = LiquidGlassTokens.Elevation,
     halo: Boolean = false,
+    blur: Boolean = true,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val palette = LiquidGlassTokens.palette()
-    // Haze is the only blur, and only on a normal device that can composite it.
-    // Weak devices and API 26–30 paint a flat fill instead of two blur passes.
-    val liveBlur = LocalPerfTier.current == PerfTier.NORMAL &&
+    // Haze is the only blur, and only when this plate asks for it on a normal
+    // device that can composite it. Weak devices, API 26–30, and blur = false
+    // paint the flat fill instead of sampling the source.
+    val liveBlur = blur && LocalPerfTier.current == PerfTier.NORMAL &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     // Same light drop shadow as the sticky player. It stays outside the offscreen
     // buffer: that buffer is only as big as the plate and would clip the shadow.
