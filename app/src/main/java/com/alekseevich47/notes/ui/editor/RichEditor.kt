@@ -98,6 +98,7 @@ private val numberedLine = Regex("""^\d+\.\s?.*""")
 @Composable
 internal fun RichNoteEditor(
     document: NoteDocument,
+    readOnly: Boolean = false,
     hiddenUnlocked: Boolean,
     onDocument: (NoteDocument) -> Unit,
     onNeedSelection: () -> Unit,
@@ -265,6 +266,7 @@ internal fun RichNoteEditor(
     }
 
     fun applyMark(style: MarkStyle) {
+        if (readOnly) return
         val start = field.selection.min
         val end = field.selection.max
         if (start == end) {
@@ -276,6 +278,7 @@ internal fun RichNoteEditor(
     }
 
     fun toggleList() {
+        if (readOnly) return
         val previous = field.text
         publish(previous, ListAutoFormat.toggleLine(previous, field.selection.min, listStart))
     }
@@ -407,7 +410,9 @@ internal fun RichNoteEditor(
             CompositionLocalProvider(LocalTextToolbar provides toolbar) {
                 BasicTextField(
                     value = field,
+                    readOnly = readOnly,
                     onValueChange = { next ->
+                        if (readOnly) return@BasicTextField
                         val previous = field.text
                         val previousSelection = field.selection
                         if (blockMenu && next.text == previous) {

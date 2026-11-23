@@ -240,6 +240,7 @@ internal fun growingColumnWidths(
 fun TableBlock(
     table: NoteTable,
     blockIndex: Int,
+    readOnly: Boolean = false,
     hiddenUnlocked: Boolean,
     formats: NoteEditorController,
     onChange: (NoteTable) -> Unit,
@@ -288,7 +289,9 @@ fun TableBlock(
             }
             BasicTextField(
                 value = caption,
+                readOnly = readOnly,
                 onValueChange = { next ->
+                    if (readOnly) return@BasicTextField
                     val cleaned = next.text.replace('\n', ' ')
                     val value = if (cleaned == next.text) next else next.copy(text = cleaned, selection = TextRange(cleaned.length))
                     caption = value
@@ -445,6 +448,7 @@ fun TableBlock(
                                     table = table,
                                     row = span.row,
                                     col = span.col,
+                                    readOnly = readOnly,
                                     width = with(density) { spanWidthPx.toDp() },
                                     shape = shape,
                                     fillColor = fillColor,
@@ -753,6 +757,7 @@ private fun TableCellEditor(
     table: NoteTable,
     row: Int,
     col: Int,
+    readOnly: Boolean,
     width: Dp,
     shape: RoundedCornerShape,
     fillColor: Color,
@@ -887,7 +892,9 @@ private fun TableCellEditor(
         CompositionLocalProvider(LocalTextToolbar provides toolbar) {
             BasicTextField(
                 value = field,
+                readOnly = readOnly,
                 onValueChange = { next ->
+                    if (readOnly) return@BasicTextField
                     val previous = field.text
                     if (!hiddenUnlocked && HiddenText.editTouches(marks, previous, next.text)) {
                         onRequestUnlock()

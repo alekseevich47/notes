@@ -34,7 +34,12 @@ class NotesRepository @Inject constructor(
         }
     }
 
-    suspend fun get(id: Long): Note? = dao.get(id)?.toDomain()
+    suspend fun get(id: Long): LoadedNote? {
+        val row = dao.get(id) ?: return null
+        val decoded = NoteDocuments.read(row.body)
+        if (decoded.unreadable) AppLog.e(TAG, "note json unreadable")
+        return LoadedNote(row.toDomain(decoded.document), decoded.unreadable)
+    }
 
     suspend fun nextSeq(): Int = dao.maxSeq() + 1
 
@@ -112,10 +117,10 @@ class NotesRepository @Inject constructor(
         dao.delete(id)
     }
 
-    private fun NoteEntity.toDomain(): Note = Note(
+    private fun NoteEntity.toDomain(document: NoteDocument = NoteDocuments.decode(body)): Note = Note(
         id = id,
         title = title,
-        document = NoteDocuments.decode(body),
+        document = document,
         audioPath = audioPath,
         createdAt = createdAt,
         updatedAt = updatedAt,
@@ -127,3 +132,8 @@ class NotesRepository @Inject constructor(
         const val TAG = "Notes"
     }
 }
+
+data class LoadedNote(
+    val note: Note,
+    val unreadable: Boolean,
+)

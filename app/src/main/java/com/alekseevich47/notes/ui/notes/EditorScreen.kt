@@ -108,6 +108,7 @@ fun EditorScreen(
     viewModel: EditorViewModel = hiltViewModel(),
 ) {
     val note by viewModel.note.collectAsState()
+    val unreadable by viewModel.unreadable.collectAsState()
     val unlocked by viewModel.unlocked.collectAsState()
     val player by viewModel.playerUi.collectAsState()
     val canUndo by viewModel.canUndo.collectAsState()
@@ -148,6 +149,9 @@ fun EditorScreen(
         val shown = note ?: return@LaunchedEffect
         if (shown.id != noteId) return@LaunchedEffect
         viewModel.player.followOpenNote(shown.id, shown.audioPath, shown.title)
+    }
+    LaunchedEffect(noteId, note?.id, unreadable) {
+        if (unreadable && note?.id == noteId) onToast("Не удалось открыть заметку")
     }
     fun openPinPrompt() {
         if (askPin) return
@@ -190,6 +194,7 @@ fun EditorScreen(
             BasicTextField(
                 value = current.title,
                 onValueChange = viewModel::setTitle,
+                readOnly = unreadable,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     autoCorrectEnabled = true,
@@ -250,6 +255,7 @@ fun EditorScreen(
                                         noteId = current.id,
                                         text = block.text,
                                         marks = block.marks,
+                                        readOnly = unreadable,
                                         placeholder = textPlaceholder(flow, index),
                                         hiddenUnlocked = unlocked,
                                         blockIndex = index,
@@ -301,6 +307,7 @@ fun EditorScreen(
                                             TableBlock(
                                                 table = table,
                                                 blockIndex = index,
+                                                readOnly = unreadable,
                                                 hiddenUnlocked = unlocked,
                                                 formats = formats,
                                                 onChange = viewModel::updateTable,
@@ -476,6 +483,7 @@ private fun NoteTextBlock(
     noteId: Long,
     text: String,
     marks: List<TextMark>,
+    readOnly: Boolean = false,
     placeholder: String,
     hiddenUnlocked: Boolean,
     blockIndex: Int,
@@ -515,6 +523,7 @@ private fun NoteTextBlock(
             text = text,
             marks = marks,
         ),
+        readOnly = readOnly,
         hiddenUnlocked = hiddenUnlocked,
         onDocument = { slice -> onText(slice.text, slice.marks) },
         onNeedSelection = onNeedSelection,

@@ -79,6 +79,8 @@ class EditorViewModel @Inject constructor(
 ) : ViewModel() {
     private val _note = MutableStateFlow<Note?>(null)
     val note: StateFlow<Note?> = _note.asStateFlow()
+    private val _unreadable = MutableStateFlow(false)
+    val unreadable: StateFlow<Boolean> = _unreadable.asStateFlow()
     private val _unlocked = MutableStateFlow(false)
     val unlocked: StateFlow<Boolean> = _unlocked.asStateFlow()
     val playerUi: StateFlow<PlayerUi> = player.state
@@ -102,17 +104,20 @@ class EditorViewModel @Inject constructor(
         undoStack.clear()
         redoStack.clear()
         refreshHistory()
+        _unreadable.value = false
         // Drop the previous note before the load so the editor cannot paint it.
         if (_note.value?.id != id) _note.value = null
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             val loaded = repository.get(id)
             if (boundId != id) return@launch
-            _note.value = loaded
+            _note.value = loaded?.note
+            _unreadable.value = loaded?.unreadable == true
         }
     }
 
     fun setTitle(title: String) {
+        if (_unreadable.value) return
         val current = _note.value ?: return
         if (current.title == title) return
         rememberEdit(current)
@@ -121,6 +126,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun setDocument(document: NoteDocument) {
+        if (_unreadable.value) return
         val current = _note.value ?: return
         if (current.document == document) return
         rememberEdit(current)
@@ -129,10 +135,12 @@ class EditorViewModel @Inject constructor(
     }
 
     fun undo() {
+        if (_unreadable.value) return
         restore(undoStack, redoStack)
     }
 
     fun redo() {
+        if (_unreadable.value) return
         restore(redoStack, undoStack)
     }
 
@@ -218,15 +226,18 @@ class EditorViewModel @Inject constructor(
     }
 
     private fun scheduleSave() {
+        if (_unreadable.value) return
         val snapshot = _note.value ?: return
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
             kotlinx.coroutines.delay(280)
+            if (_unreadable.value) return@launch
             repository.save(snapshot)
         }
     }
 
     fun flush() {
+        if (_unreadable.value) return
         val snapshot = _note.value ?: return
         viewModelScope.launch { repository.save(snapshot) }
     }
@@ -236,8 +247,9 @@ class EditorViewModel @Inject constructor(
         saveJob?.cancel()
         val snapshot = _note.value
         val closingId = snapshot?.id
+        val blocked = _unreadable.value
         viewModelScope.launch {
-            if (snapshot != null) {
+            if (snapshot != null && !blocked) {
                 if (isPristine(snapshot)) repository.delete(snapshot.id) else repository.save(snapshot)
             }
             releaseIfCurrent(closingId)
@@ -261,6 +273,7 @@ class EditorViewModel @Inject constructor(
         if (id != null && boundId != id) return
         loadJob?.cancel()
         _note.value = null
+        _unreadable.value = false
         boundId = -1
         undoStack.clear()
         redoStack.clear()
@@ -268,6 +281,7 @@ class EditorViewModel @Inject constructor(
     }
 
     suspend fun abandonIfEmpty() {
+        if (_unreadable.value) return
         val snapshot = _note.value ?: return
         if (isPristine(snapshot)) repository.delete(snapshot.id)
     }

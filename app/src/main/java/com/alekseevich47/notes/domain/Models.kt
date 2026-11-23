@@ -1,7 +1,17 @@
 package com.alekseevich47.notes.domain
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.encoding.CompositeDecoder
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.encoding.decodeStructure
+import kotlinx.serialization.encoding.encodeStructure
 import kotlinx.serialization.json.Json
 import java.util.Locale
 
@@ -10,6 +20,64 @@ enum class MicPhase { IDLE, RECORDING, PROCESSING, DONE }
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class MarkStyle { BOLD, ITALIC, STRIKE, UNDERLINE, HIDDEN }
+
+/**
+ * Unknown style names deserialize as null and are dropped from the mark list.
+ * Known names still encode as the enum constant so existing files stay valid.
+ */
+internal object TolerantTextMarkSerializer : KSerializer<TextMark?> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("TextMark") {
+        element<Int>("start")
+        element<Int>("end")
+        element<String>("style")
+    }
+
+    override fun serialize(encoder: Encoder, value: TextMark?) {
+        val mark = requireNotNull(value)
+        encoder.encodeStructure(descriptor) {
+            encodeIntElement(descriptor, 0, mark.start)
+            encodeIntElement(descriptor, 1, mark.end)
+            encodeStringElement(descriptor, 2, mark.style.name)
+        }
+    }
+
+    override fun deserialize(decoder: Decoder): TextMark? {
+        var start = 0
+        var end = 0
+        var style: MarkStyle? = null
+        decoder.decodeStructure(descriptor) {
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    0 -> start = decodeIntElement(descriptor, 0)
+                    1 -> end = decodeIntElement(descriptor, 1)
+                    2 -> style = markStyleOrNull(decodeStringElement(descriptor, 2))
+                    CompositeDecoder.DECODE_DONE -> break
+                    else -> break
+                }
+            }
+        }
+        val resolved = style ?: return null
+        return TextMark(start, end, resolved)
+    }
+}
+
+internal object TextMarkListSerializer : KSerializer<List<TextMark>> {
+    private val elements = ListSerializer(TolerantTextMarkSerializer)
+    override val descriptor: SerialDescriptor = elements.descriptor
+
+    override fun serialize(encoder: Encoder, value: List<TextMark>) {
+        val nullable: List<TextMark?> = value.map { mark -> mark }
+        elements.serialize(encoder, nullable)
+    }
+
+    override fun deserialize(decoder: Decoder): List<TextMark> {
+        return elements.deserialize(decoder).filterNotNull()
+    }
+}
+
+private fun markStyleOrNull(name: String): MarkStyle? {
+    return MarkStyle.entries.firstOrNull { it.name == name }
+}
 
 @Serializable
 data class TextMark(
@@ -26,6 +94,7 @@ data class TextMark(
 data class CellMarks(
     val row: Int = 0,
     val col: Int = 0,
+    @Serializable(with = TextMarkListSerializer::class)
     val marks: List<TextMark> = emptyList(),
 )
 
@@ -54,6 +123,7 @@ enum class BlockKind { TEXT, TABLE }
 data class NoteBlock(
     val kind: BlockKind = BlockKind.TEXT,
     val text: String = "",
+    @Serializable(with = TextMarkListSerializer::class)
     val marks: List<TextMark> = emptyList(),
     val table: NoteTable? = null,
 )
@@ -61,6 +131,7 @@ data class NoteBlock(
 @Serializable
 data class NoteDocument(
     val text: String = "",
+    @Serializable(with = TextMarkListSerializer::class)
     val marks: List<TextMark> = emptyList(),
     val tables: List<NoteTable> = emptyList(),
     /** Paragraph under the last table. Folded back into [text] when no tables remain. */
@@ -97,13 +168,25 @@ object NoteDocuments {
         encodeDefaults = true
     }
 
+    /** [unreadable] is a `{` payload that still failed. The body is not the raw JSON. */
+    data class Decoded(
+        val document: NoteDocument,
+        val unreadable: Boolean,
+    )
+
     fun encode(document: NoteDocument): String = json.encodeToString(document)
 
-    fun decode(raw: String): NoteDocument {
-        if (raw.isBlank()) return NoteDocument()
-        return runCatching { json.decodeFromString<NoteDocument>(raw) }
-            .getOrElse { NoteDocument(text = raw) }
+    fun read(raw: String): Decoded {
+        if (raw.isBlank()) return Decoded(NoteDocument(), unreadable = false)
+        return try {
+            Decoded(json.decodeFromString<NoteDocument>(raw), unreadable = false)
+        } catch (_: Exception) {
+            if (raw.startsWith("{")) Decoded(NoteDocument(), unreadable = true)
+            else Decoded(NoteDocument(text = raw), unreadable = false)
+        }
     }
+
+    fun decode(raw: String): NoteDocument = read(raw).document
 
     fun plainText(document: NoteDocument): String {
         if (document.blocks.isNotEmpty()) {
