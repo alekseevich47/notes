@@ -46,8 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.alekseevich47.notes.domain.Note
-import com.alekseevich47.notes.domain.NoteDocuments
+import com.alekseevich47.notes.domain.NoteListItem
 import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.DayRange
 import com.alekseevich47.notes.ui.components.LiquidGlassPlate
@@ -64,7 +63,7 @@ import java.util.Locale
 
 @Composable
 fun NotesListScreen(
-    notes: List<Note>,
+    notes: List<NoteListItem>,
     query: String,
     range: DayRange?,
     hazeState: HazeState,
@@ -252,7 +251,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modi
 
 @Composable
 private fun NoteCard(
-    note: Note,
+    note: NoteListItem,
     selecting: Boolean,
     checked: Boolean,
     onClick: () -> Unit,
@@ -279,7 +278,7 @@ private fun NoteCard(
         Column(Modifier.weight(1f)) {
         Text(note.title, style = MaterialTheme.typography.titleMedium, fontFamily = NotesFont, maxLines = 1, overflow = TextOverflow.Ellipsis)
         SpoilerPreview(
-            parts = NoteDocuments.previewParts(note.document),
+            parts = note.preview,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = NotesFont),
             modifier = Modifier.padding(top = 4.dp),

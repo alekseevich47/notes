@@ -1,5 +1,6 @@
 package com.alekseevich47.notes.domain
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -146,6 +147,15 @@ data class NoteDocument(
 data class PreviewPart(
     val text: String,
     val hidden: Boolean,
+)
+
+@Immutable
+data class NoteListItem(
+    val id: Long,
+    val title: String,
+    val preview: List<PreviewPart>,
+    val updatedAt: Long,
+    val hasAudio: Boolean,
 )
 
 data class Note(

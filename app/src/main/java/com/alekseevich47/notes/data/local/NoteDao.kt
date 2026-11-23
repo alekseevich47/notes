@@ -13,10 +13,11 @@ interface NoteDao {
         SELECT * FROM notes
         WHERE (:fromMs IS NULL OR createdAt >= :fromMs)
           AND (:toMs IS NULL OR createdAt < :toMs)
+          AND (:needle = '' OR searchBlob LIKE '%' || :needle || '%' ESCAPE '\')
         ORDER BY createdAt DESC, id DESC
         """,
     )
-    fun observe(fromMs: Long?, toMs: Long?): Flow<List<NoteEntity>>
+    fun observe(fromMs: Long?, toMs: Long?, needle: String): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
     suspend fun get(id: Long): NoteEntity?

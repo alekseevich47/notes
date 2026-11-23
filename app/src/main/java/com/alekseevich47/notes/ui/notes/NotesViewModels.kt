@@ -9,6 +9,7 @@ import com.alekseevich47.notes.domain.BlockKind
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteDocuments
+import com.alekseevich47.notes.domain.NoteListItem
 import com.alekseevich47.notes.domain.NoteTable
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.player.NotePlayer
@@ -42,7 +43,7 @@ class NotesViewModel @Inject constructor(
     val search: StateFlow<String> = query.asStateFlow()
     val dateRange: StateFlow<DayRange?> = range.asStateFlow()
 
-    val notes: StateFlow<List<Note>> = combine(query.debounce(80), range) { q, dates ->
+    val notes: StateFlow<List<NoteListItem>> = combine(query.debounce(80), range) { q, dates ->
         val zone = ZoneId.systemDefault()
         val from = dates?.start?.atStartOfDay(zone)?.toInstant()?.toEpochMilli()
         val to = dates?.end?.plusDays(1)?.atStartOfDay(zone)?.toInstant()?.toEpochMilli()

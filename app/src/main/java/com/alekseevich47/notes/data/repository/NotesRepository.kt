@@ -1,17 +1,21 @@
 package com.alekseevich47.notes.data.repository
 
 import android.content.Context
+import android.util.LruCache
 import com.alekseevich47.notes.data.local.NoteDao
 import com.alekseevich47.notes.data.local.NoteEntity
 import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
 import com.alekseevich47.notes.domain.NoteDocuments
+import com.alekseevich47.notes.domain.NoteListItem
 import com.alekseevich47.notes.log.AppLog
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -24,14 +28,14 @@ class NotesRepository @Inject constructor(
     private val dao: NoteDao,
     @ApplicationContext private val context: Context,
 ) {
-    fun observe(query: String, fromMs: Long?, toMs: Long?): Flow<List<Note>> {
-        val needle = query.trim().lowercase(Locale.getDefault())
-        return dao.observe(fromMs, toMs).map { rows ->
-            rows.asSequence()
-                .map { it.toDomain() }
-                .filter { needle.isEmpty() || it.searchBlob.contains(needle) }
-                .toList()
-        }
+    private val listItems = LruCache<Long, Pair<Long, NoteListItem>>(256)
+
+    fun observe(query: String, fromMs: Long?, toMs: Long?): Flow<List<NoteListItem>> {
+        val needle = escapeSearchNeedle(query.trim().lowercase(Locale.getDefault()))
+        return dao.observe(fromMs, toMs, needle)
+            .map { rows -> rows.map { it.toListItem() } }
+            .distinctUntilChanged()
+            .flowOn(Dispatchers.Default)
     }
 
     suspend fun get(id: Long): LoadedNote? {
@@ -117,6 +121,20 @@ class NotesRepository @Inject constructor(
         dao.delete(id)
     }
 
+    private fun NoteEntity.toListItem(): NoteListItem {
+        val hit = listItems.get(id)
+        if (hit != null && hit.first == updatedAt) return hit.second
+        val item = NoteListItem(
+            id = id,
+            title = title,
+            preview = NoteDocuments.previewParts(NoteDocuments.decode(body)),
+            updatedAt = updatedAt,
+            hasAudio = audioPath != null,
+        )
+        listItems.put(id, updatedAt to item)
+        return item
+    }
+
     private fun NoteEntity.toDomain(document: NoteDocument = NoteDocuments.decode(body)): Note = Note(
         id = id,
         title = title,
@@ -137,3 +155,14 @@ data class LoadedNote(
     val note: Note,
     val unreadable: Boolean,
 )
+
+/** LIKE metacharacters, backslash first so an escaped `%` is not escaped again. */
+internal fun escapeSearchNeedle(needle: String): String {
+    if (needle.isEmpty()) return needle
+    val out = StringBuilder(needle.length)
+    for (ch in needle) {
+        if (ch == '\\' || ch == '%' || ch == '_') out.append('\\')
+        out.append(ch)
+    }
+    return out.toString()
+}
