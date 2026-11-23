@@ -13,6 +13,7 @@ import com.alekseevich47.notes.data.audio.WavWriter
 import com.alekseevich47.notes.data.download.ModelDownloadManager
 import com.alekseevich47.notes.data.download.ModelKind
 import com.alekseevich47.notes.data.repository.NotesRepository
+import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.data.secure.RecognizerChoice
 import com.alekseevich47.notes.data.secure.SecureSettingsStore
 import com.alekseevich47.notes.domain.MicPhase
@@ -134,14 +135,19 @@ class RecordingSession @Inject constructor(
                 ) {
                     ModelWarmupService.start(context)
                 }
-                val toneInstalled = withContext(Dispatchers.IO) { models.isInstalled(ModelKind.T_ONE) }
-                val toneEnabled = settings.isModelEnabled(ModelKind.T_ONE)
-                when (
-                    MicRouting.liveMode(
-                        RecognizerChoice.effective(settings.recognizer.value, toneInstalled && toneEnabled),
-                        settings.warmupOnBoot.value,
-                    )
-                ) {
+                val stored = settings.recognizer.value
+                var toneInstalled = false
+                var toneEnabled = false
+                val recognizer = if (stored == NotesPrefs.RECOGNIZER_SYSTEM) {
+                    stored
+                } else {
+                    withContext(Dispatchers.IO) {
+                        toneInstalled = models.isInstalled(ModelKind.T_ONE)
+                        toneEnabled = settings.isModelEnabled(ModelKind.T_ONE)
+                    }
+                    RecognizerChoice.effective(stored, toneInstalled && toneEnabled)
+                }
+                when (MicRouting.liveMode(recognizer, settings.warmupOnBoot.value)) {
                     LiveMode.TONE_COLD -> {
                         freezeLiveText = true
                         _text.value = MicRouting.COLD_TONE_TEXT
