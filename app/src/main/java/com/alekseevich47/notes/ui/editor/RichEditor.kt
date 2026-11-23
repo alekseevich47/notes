@@ -1,7 +1,10 @@
 package com.alekseevich47.notes.ui.editor
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -29,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -48,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -89,12 +94,13 @@ import com.alekseevich47.notes.domain.NoteTables
 import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesPurple
+import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 
 private val numberedLine = Regex("""^\d+\.\s?.*""")
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun RichNoteEditor(
     document: NoteDocument,
@@ -167,6 +173,10 @@ internal fun RichNoteEditor(
         }
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var pendingReveal by remember { mutableStateOf(false) }
+    val bring = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     var textCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var menuOverflow by remember { mutableStateOf(false) }
     var menuVisible by remember { mutableStateOf(false) }
@@ -404,6 +414,16 @@ internal fun RichNoteEditor(
         collapseSelection()
     }
 
+    fun scheduleReveal(result: TextLayoutResult) {
+        if (!pendingReveal || readOnly || !blockFocused) return
+        val laidOut = result.layoutInput.text.text
+        if (laidOut != field.text) return
+        pendingReveal = false
+        val end = field.selection.end.coerceIn(0, laidOut.length)
+        val rect = result.getCursorRect(end).inflate(with(density) { 16.dp.toPx() })
+        scope.launch { bring.bringIntoView(rect) }
+    }
+
     InterceptPlatformTextInput(interceptor = tableBackspace) {
     Column(modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth()) {
@@ -442,6 +462,7 @@ internal fun RichNoteEditor(
                         if (edit.text != previous) {
                             toolbar.suppressPlatform = false
                             releasePlatformMenu = false
+                            if (blockFocused) pendingReveal = true
                         }
                         // The menu waits for finger-up. Compose asks the toolbar to show only
                         // after the selection gesture ends; showing here covers the magnifier.
@@ -452,19 +473,23 @@ internal fun RichNoteEditor(
                                 marks = MarkEdits.shift(document.marks, previous, edit.text),
                             ),
                         )
+                        val ready = layout
+                        if (ready != null) scheduleReveal(ready)
                     },
                     onTextLayout = { result ->
-                        val previous = layout
+                        val previousLayout = layout
                         if (
-                            previous == null ||
-                            previous.size != result.size ||
-                            previous.layoutInput.text.text != result.layoutInput.text.text
+                            previousLayout == null ||
+                            previousLayout.size != result.size ||
+                            previousLayout.layoutInput.text.text != result.layoutInput.text.text
                         ) {
                             layout = result
                         }
+                        scheduleReveal(result)
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .bringIntoViewRequester(bring)
                         .onPreviewKeyEvent { event ->
                             event.type == KeyEventType.KeyDown &&
                                 event.key == Key.Backspace &&

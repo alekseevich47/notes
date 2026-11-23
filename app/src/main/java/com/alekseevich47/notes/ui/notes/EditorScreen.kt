@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -51,29 +50,19 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.alekseevich47.notes.domain.BlockKind
-import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.NoteBlock
 import com.alekseevich47.notes.domain.NoteDocuments
 import com.alekseevich47.notes.domain.TextMark
@@ -95,7 +84,6 @@ import com.alekseevich47.notes.ui.theme.NotesMuted
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import kotlin.math.roundToInt
 
 private enum class HiddenPinStage { UNLOCK, CREATE, CONFIRM }
 
@@ -234,7 +222,6 @@ fun EditorScreen(
                 val structure = flow.count { it.kind == BlockKind.TABLE } to flow.size
                 val lastText = flow.indexOfLast { it.kind == BlockKind.TEXT }
                 val requesters = remember(current.id, structure) { List(flow.size) { FocusRequester() } }
-                val textWidth = (maxWidth - 40.dp).coerceAtLeast(1.dp)
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -269,9 +256,6 @@ fun EditorScreen(
                                         pinDialogVisible = askPin,
                                         surface = surface,
                                         useSharedSurface = index == 0,
-                                        scroll = scroll,
-                                        textWidth = textWidth,
-                                        bodyCoords = bodyCoords,
                                         onText = { text, marks -> viewModel.setBlockText(index, text, marks) },
                                         onNeedSelection = { onToast("Выделите фрагмент") },
                                         onRequestUnlock = { openPinPrompt() },
@@ -497,9 +481,6 @@ private fun NoteTextBlock(
     pinDialogVisible: Boolean,
     surface: NoteSurfaceBridge,
     useSharedSurface: Boolean,
-    scroll: ScrollState,
-    textWidth: Dp,
-    bodyCoords: LayoutCoordinates?,
     onText: (String, List<TextMark>) -> Unit,
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
@@ -509,20 +490,7 @@ private fun NoteTextBlock(
     caretOffset: Int = 0,
     listStart: Int = 1,
 ) {
-    var focused by remember(noteId, blockIndex) { mutableStateOf(false) }
-    var top by remember(noteId, blockIndex) { mutableIntStateOf(0) }
     val bridge = remember(noteId, blockIndex) { NoteSurfaceBridge() }
-    KeepCaretVisible(
-        noteId = noteId,
-        text = text,
-        marks = marks,
-        hiddenLocked = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN },
-        focused = focused,
-        textWidth = textWidth,
-        scroll = scroll,
-        contentTopPx = top,
-        followEdits = true,
-    )
     RichNoteEditor(
         document = com.alekseevich47.notes.domain.NoteDocument(
             text = text,
@@ -538,18 +506,9 @@ private fun NoteTextBlock(
         formats = formats,
         pinDialogVisible = pinDialogVisible,
         surface = if (useSharedSurface) surface else bridge,
-        modifier = Modifier
-            .padding(horizontal = 20.dp)
-            .onGloballyPositioned { coords ->
-                val content = bodyCoords
-                if (content == null || !content.isAttached || !coords.isAttached) return@onGloballyPositioned
-                val origin = content.localToRoot(Offset.Zero)
-                val here = coords.localToRoot(Offset.Zero)
-                top = (here.y - origin.y).roundToInt()
-            },
+        modifier = Modifier.padding(horizontal = 20.dp),
         blockIndex = blockIndex,
         placeholder = placeholder,
-        onFocused = { focused = it },
         onDeleteTableAbove = onDeleteTableAbove,
         caretToken = caretToken,
         caretOffset = caretOffset,
@@ -575,92 +534,6 @@ internal fun lastEditedCaption(
     val stamp = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
         .format(Instant.ofEpochMilli(updatedAt).atZone(zone))
     return "последнее изменение: $stamp"
-}
-
-/**
- * Scrolls a note field when typing pushes the caret below the viewport.
- * Selection changes do not move the scroll: only a text edit does, and only
- * downward. The body ignores edits while it is unfocused. The trailing field
- * passes [followEdits] so growth still scrolls if the focus callback is late.
- *
- * [contentTopPx] is the field's top inside the scroll content. Pass -1 until
- * that position is known so a tall table above the field is included.
- */
-@Composable
-private fun KeepCaretVisible(
-    noteId: Long,
-    text: String,
-    marks: List<TextMark>,
-    hiddenLocked: Boolean,
-    focused: Boolean,
-    textWidth: Dp,
-    scroll: ScrollState,
-    contentTopPx: Int = 0,
-    topInsetPx: Int = 0,
-    followEdits: Boolean = false,
-) {
-    val tracked = remember(noteId) { mutableStateOf(text) }
-    var edited by remember(noteId) { mutableStateOf(false) }
-    var caret by remember(noteId) { mutableIntStateOf(text.length) }
-    val measurer = rememberTextMeasurer()
-    val density = LocalDensity.current
-    val body = MaterialTheme.typography.bodyLarge.copy(fontFamily = NotesFont)
-    val viewport = scroll.viewportSize
-    LaunchedEffect(noteId, text, focused, textWidth, viewport, contentTopPx, topInsetPx) {
-        if (contentTopPx < 0) return@LaunchedEffect
-        val before = tracked.value
-        val textChanged = before != text
-        if (textChanged && (focused || followEdits)) {
-            caret = inferCaretAfterEdit(before, text)
-            edited = true
-        } else if (!focused || !edited) {
-            tracked.value = text
-            return@LaunchedEffect
-        }
-        tracked.value = text
-        val widthPx = with(density) { textWidth.roundToPx().coerceAtLeast(1) }
-        val marginPx = with(density) { 16.dp.roundToPx() }
-        val layout = measurer.measure(
-            text = annotatedNote(text, marks),
-            style = body,
-            constraints = Constraints(maxWidth = widthPx),
-        )
-        val rect = layout.getCursorRect(caret.coerceIn(0, text.length))
-        val caretBottom = trailingCaretBottom(
-            fieldTopPx = contentTopPx,
-            topInsetPx = topInsetPx,
-            cursorBottomPx = rect.bottom.roundToInt(),
-        )
-        repeat(4) { frame ->
-            withFrameNanos { }
-            val delta = revealCaretDelta(
-                scrollValue = scroll.value,
-                viewport = scroll.viewportSize,
-                caretBottom = caretBottom,
-                marginPx = marginPx,
-            )
-            if (delta == 0) return@LaunchedEffect
-            val max = scroll.maxValue
-            val target = (scroll.value + delta).coerceAtMost(max.coerceAtLeast(0))
-            if (target <= scroll.value && frame < 3) return@repeat
-            if (target > scroll.value) scroll.scrollTo(target)
-            return@LaunchedEffect
-        }
-    }
-}
-
-private fun annotatedNote(text: String, marks: List<TextMark>) = buildAnnotatedString {
-    append(text)
-    marks.forEach { mark ->
-        val style = when (mark.style) {
-            MarkStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
-            MarkStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
-            else -> null
-        } ?: return@forEach
-        val start = mark.start.coerceIn(0, length)
-        val end = mark.end.coerceIn(0, length)
-        if (end > start) addStyle(style, start, end)
-    }
 }
 
 /** Caret bottom inside the scroll content: field top, padding above the text, then the cursor. */
