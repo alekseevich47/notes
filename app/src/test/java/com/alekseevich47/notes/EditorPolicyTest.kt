@@ -4,6 +4,7 @@ import com.alekseevich47.notes.data.secure.PinHasher
 import com.alekseevich47.notes.ui.notes.EditorPinCheck
 import com.alekseevich47.notes.ui.notes.EditorPins
 import com.alekseevich47.notes.ui.notes.lastEditedCaption
+import com.alekseevich47.notes.ui.notes.shouldClearFocusAfterImeHide
 import com.alekseevich47.notes.ui.editor.CellSpan
 import com.alekseevich47.notes.ui.editor.anchorSpans
 import com.alekseevich47.notes.ui.editor.cellLongPressOpensCellMenu
@@ -80,6 +81,14 @@ class EditorPolicyTest {
         val (width, height) = spanSize(spans[0], floatArrayOf(80f, 80f), heights)
         assertEquals(80f, width, 0.01f)
         assertEquals(96f, height, 0.01f)
+    }
+
+    @Test
+    fun imeHideClearsFocusOnlyAfterTheKeyboardWasShownAndNoDialogIsOpen() {
+        assertTrue(shouldClearFocusAfterImeHide(wasShown = true, visible = false, dialogOpen = false))
+        assertFalse(shouldClearFocusAfterImeHide(wasShown = false, visible = false, dialogOpen = false))
+        assertFalse(shouldClearFocusAfterImeHide(wasShown = true, visible = true, dialogOpen = false))
+        assertFalse(shouldClearFocusAfterImeHide(wasShown = true, visible = false, dialogOpen = true))
     }
 
     @Test

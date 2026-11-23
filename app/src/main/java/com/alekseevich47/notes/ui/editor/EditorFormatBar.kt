@@ -23,8 +23,11 @@ import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +56,9 @@ class NoteEditorController {
     var listActive by mutableStateOf(false)
     var tableBlock: Int = 0
     var tableCursor: Int = 0
+    var screenDialogOpen by mutableStateOf(false)
+    var linkDialogCount by mutableIntStateOf(0)
+    val dialogOpen: Boolean get() = screenDialogOpen || linkDialogCount > 0
     var bold: () -> Unit = {}
     var italic: () -> Unit = {}
     var underline: () -> Unit = {}
@@ -60,6 +66,32 @@ class NoteEditorController {
     var hidden: () -> Unit = {}
     var list: () -> Unit = {}
     var table: () -> Unit = {}
+}
+
+/**
+ * Counts open link dialogs. Several blocks can show one, so a single boolean
+ * written by the last block would hide the others. The count is snapshot state
+ * so leaving the composition drops it before the keyboard-hide check.
+ */
+@Composable
+internal fun ReportLinkDialog(formats: NoteEditorController, open: Boolean) {
+    val held = remember { object { var open = false } }
+    if (open != held.open) {
+        held.open = open
+        formats.linkDialogCount = if (open) {
+            formats.linkDialogCount + 1
+        } else {
+            (formats.linkDialogCount - 1).coerceAtLeast(0)
+        }
+    }
+    DisposableEffect(formats) {
+        onDispose {
+            if (held.open) {
+                held.open = false
+                formats.linkDialogCount = (formats.linkDialogCount - 1).coerceAtLeast(0)
+            }
+        }
+    }
 }
 
 @Composable

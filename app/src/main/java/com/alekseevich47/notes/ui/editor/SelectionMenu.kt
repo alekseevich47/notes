@@ -4,12 +4,12 @@ import android.view.View
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -36,14 +36,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -65,8 +73,8 @@ import kotlin.math.min
 /**
  * Telegram-style selection bubble. Primary row is Cut / Copy / Paste / overflow.
  * Paste is shown only when the clipboard has text. The formatting list is
- * Select all, the styles, Plain, then Back. Active styles carry a check.
- * Quote is intentionally absent.
+ * Select all, Plain, then the styles, and Back stays put under the scroller.
+ * Active styles carry a check. Quote is intentionally absent.
  */
 @Composable
 fun SelectionActionsPopup(
@@ -90,9 +98,112 @@ fun SelectionActionsPopup(
     onLink: () -> Unit,
     onPlain: () -> Unit,
 ) {
+    // Filled during popup measure, before the window is positioned. Not state:
+    // a new size must not recompose the editor on the next key.
+    val reserve = remember { PlateReserve() }
+    SelectionBubble(
+        startHandle = startHandle,
+        endHandle = endHandle,
+        onDismiss = onDismiss,
+        reserve = reserve,
+    ) {
+        val canPaste = LocalClipboardManager.current.hasText()
+        SubcomposeLayout { constraints ->
+            val windowWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else -1
+            if (!reserve.matches(windowWidth, canPaste, activeStyles)) {
+                val menuConstraints = constraints.copy(minWidth = 0, minHeight = 0)
+                val primary = subcompose(ReservePrimary) {
+                    PrimaryMenu(
+                        canPaste = canPaste,
+                        onCut = onCut,
+                        onCopy = onCopy,
+                        onPaste = onPaste,
+                        onMore = onMore,
+                    )
+                }.first().measure(menuConstraints)
+                val overflowPage = subcompose(ReserveOverflow) {
+                    OverflowMenu(
+                        activeStyles = activeStyles,
+                        onHidden = onHidden,
+                        onSelectAll = onSelectAll,
+                        onBold = onBold,
+                        onItalic = onItalic,
+                        onStrike = onStrike,
+                        onUnderline = onUnderline,
+                        onMono = onMono,
+                        onLink = onLink,
+                        onPlain = onPlain,
+                        onBack = onBack,
+                    )
+                }.first().measure(menuConstraints)
+                reserve.store(
+                    windowWidth = windowWidth,
+                    canPaste = canPaste,
+                    styles = activeStyles,
+                    size = IntSize(
+                        max(primary.width, overflowPage.width),
+                        max(primary.height, overflowPage.height),
+                    ),
+                )
+            }
+            val page = subcompose(ReserveContent) {
+                AnimatedContent(
+                    targetState = overflow,
+                    transitionSpec = {
+                        (fadeIn(tween(140)) togetherWith fadeOut(tween(100))).using(
+                            SizeTransform(clip = false) { _, _ -> snap() },
+                        )
+                    },
+                    label = "selection-menu",
+                ) { formatting ->
+                    if (formatting) {
+                        OverflowMenu(
+                            activeStyles = activeStyles,
+                            onHidden = onHidden,
+                            onSelectAll = onSelectAll,
+                            onBold = onBold,
+                            onItalic = onItalic,
+                            onStrike = onStrike,
+                            onUnderline = onUnderline,
+                            onMono = onMono,
+                            onLink = onLink,
+                            onPlain = onPlain,
+                            onBack = onBack,
+                        )
+                    } else {
+                        PrimaryMenu(
+                            canPaste = canPaste,
+                            onCut = onCut,
+                            onCopy = onCopy,
+                            onPaste = onPaste,
+                            onMore = onMore,
+                        )
+                    }
+                }
+            }.first().measure(constraints)
+            layout(page.width, page.height) {
+                page.place(0, 0)
+            }
+        }
+    }
+}
+
+/**
+ * Shared chrome for the selection menu and the one-button paste bubble.
+ * [reserve] is the plate used to decide above/below and the horizontal center.
+ * An empty reserve follows the plate that is on screen.
+ */
+@Composable
+private fun SelectionBubble(
+    startHandle: Rect,
+    endHandle: Rect,
+    onDismiss: () -> Unit,
+    reserve: PlateReserve = emptyPlateReserve,
+    content: @Composable () -> Unit,
+) {
     val density = LocalDensity.current
     val gapPx = with(density) { 10.dp.roundToPx() }
-    val marginPx = with(density) { 8.dp.roundToPx() }
+    val marginPx = with(density) { MenuScreenMargin.roundToPx() }
     val shadowRoom = softShadowRoom(10.dp)
     val shadowPadPx = with(density) { shadowRoom.roundToPx() }
     Popup(
@@ -112,6 +223,7 @@ fun SelectionActionsPopup(
                     gapPx = gapPx,
                     marginPx = marginPx,
                     shadowPadPx = shadowPadPx,
+                    reserve = reserve.size,
                 )
             }
         },
@@ -125,66 +237,102 @@ fun SelectionActionsPopup(
     ) {
         val shape = RoundedCornerShape(16.dp)
         val plate = MaterialTheme.colorScheme.surface
-        Box(
-            modifier = Modifier
-                .softShadowPadding(
-                    shape = shape,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
-                    room = shadowRoom,
-                    steps = softShadowSteps(LocalPerfTier.current),
-                )
-                .clip(shape)
-                .background(plate),
-        ) {
-            KeepMenuAboveHandles()
-            val canPaste = LocalClipboardManager.current.hasText()
-            AnimatedContent(
-                targetState = overflow,
-                transitionSpec = {
-                    val forward = targetState
-                    val slide = tween<IntOffset>(180)
-                    val fade = tween<Float>(180)
-                    val enter = fadeIn(fade) + slideInHorizontally(slide) { width ->
-                        if (forward) width else -width
-                    }
-                    val exit = fadeOut(fade) + slideOutHorizontally(slide) { width ->
-                        if (forward) -width else width
-                    }
-                    (enter togetherWith exit).using(
-                        SizeTransform(clip = false) { _, _ -> tween(180) },
+        // The popup is measured against the window. Keep the plate inside the
+        // same margin placeSelectionMenu uses, so the ⋮ button is never the
+        // piece that gets squeezed off the screen.
+        BoxWithConstraints {
+            val maxPlate = if (maxWidth.value.isFinite()) {
+                (maxWidth - MenuScreenMargin * 2).coerceAtLeast(0.dp)
+            } else {
+                maxWidth
+            }
+            Box(
+                modifier = Modifier
+                    .softShadowPadding(
+                        shape = shape,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                        room = shadowRoom,
+                        steps = softShadowSteps(LocalPerfTier.current),
                     )
-                },
-                label = "selection-menu",
-            ) { formatting ->
-                if (formatting) {
-                    OverflowMenu(
-                        activeStyles = activeStyles,
-                        onHidden = onHidden,
-                        onSelectAll = onSelectAll,
-                        onBold = onBold,
-                        onItalic = onItalic,
-                        onStrike = onStrike,
-                        onUnderline = onUnderline,
-                        onMono = onMono,
-                        onLink = onLink,
-                        onPlain = onPlain,
-                        onBack = onBack,
-                    )
-                } else {
-                    PrimaryMenu(
-                        canPaste = canPaste,
-                        onCut = onCut,
-                        onCopy = onCopy,
-                        onPaste = onPaste,
-                        onMore = onMore,
-                    )
-                }
+                    .widthIn(max = maxPlate)
+                    .clip(shape)
+                    .background(plate),
+            ) {
+                KeepMenuAboveHandles()
+                content()
             }
         }
     }
 }
 
-private fun placeSelectionMenu(
+@Composable
+fun PasteActionPopup(anchor: Rect, onPaste: () -> Unit, onDismiss: () -> Unit) {
+    SelectionBubble(
+        startHandle = anchor,
+        endHandle = anchor,
+        onDismiss = onDismiss,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        ) {
+            BubbleLabel("Вставить", onPaste)
+        }
+    }
+}
+
+private val MenuScreenMargin = 8.dp
+private val OverflowRowHeight = 48.dp
+private val BackRowHeight = 48.dp
+private val OverflowDividerHeight = 0.6.dp
+private val OverflowDividerTop = 2.dp
+
+/**
+ * How many overflow rows fit above the fixed back block.
+ * Short windows floor at 3; anything taller than six rows stays at 6.
+ */
+internal fun overflowVisibleRows(maxHeightDp: Float, rowDp: Float, backBlockDp: Float): Int {
+    if (!(rowDp > 0f) || !maxHeightDp.isFinite()) return 6
+    val rows = ((maxHeightDp - backBlockDp) / rowDp).toInt()
+    return rows.coerceIn(3, 6)
+}
+
+private const val ReservePrimary = "reserve-primary"
+private const val ReserveOverflow = "reserve-overflow"
+private const val ReserveContent = "reserve-content"
+
+/**
+ * Max plate of both menu pages, excluding the shadow padding. Recomputed only
+ * when [matches] fails, so a keystroke that does not change paste, width, or
+ * styles does not measure the hidden page again.
+ */
+private class PlateReserve {
+    private var windowWidth: Int = Int.MIN_VALUE
+    private var canPaste: Boolean = false
+    private var styles: Set<MarkStyle> = emptySet()
+    var size: IntSize = IntSize.Zero
+        private set
+
+    fun matches(windowWidth: Int, canPaste: Boolean, styles: Set<MarkStyle>): Boolean {
+        return this.windowWidth == windowWidth && this.canPaste == canPaste && this.styles == styles
+    }
+
+    fun store(windowWidth: Int, canPaste: Boolean, styles: Set<MarkStyle>, size: IntSize) {
+        this.windowWidth = windowWidth
+        this.canPaste = canPaste
+        this.styles = styles.toSet()
+        this.size = size
+    }
+}
+
+private val emptyPlateReserve = PlateReserve()
+
+/**
+ * Places the plate so the horizontal center and the edge nearest the text stay
+ * put when the page changes. [reserve] is the larger page, without shadow padding.
+ * Above or below is chosen from that height, not from the page on screen.
+ */
+internal fun placeSelectionMenu(
     anchorBounds: IntRect,
     windowSize: IntSize,
     popupContentSize: IntSize,
@@ -193,26 +341,50 @@ private fun placeSelectionMenu(
     gapPx: Int,
     marginPx: Int,
     shadowPadPx: Int,
+    reserve: IntSize,
 ): IntOffset {
     val selLeft = min(startHandle.left, endHandle.left)
     val selRight = max(startHandle.right, endHandle.right)
     val selTop = min(startHandle.top, endHandle.top)
     val selBottom = max(startHandle.bottom, endHandle.bottom)
-    // Padding gives the fade room inside the popup window. Place the plate, not
-    // the padding, so the labels stay on the same spot.
+    // Shadow padding is part of the popup window. Place the plate, not the padding.
     val plateWidth = (popupContentSize.width - shadowPadPx * 2).coerceAtLeast(0)
     val plateHeight = (popupContentSize.height - shadowPadPx * 2).coerceAtLeast(0)
-    val center = anchorBounds.left + ((selLeft + selRight) / 2f).toInt()
-    var x = center - plateWidth / 2
-    var y = anchorBounds.top + selTop.toInt() - plateHeight - gapPx
-    if (y < marginPx) {
-        y = anchorBounds.top + selBottom.toInt() + gapPx + 18
+    val reserved = if (reserve.width == 0 && reserve.height == 0) {
+        IntSize(plateWidth, plateHeight)
+    } else {
+        reserve
     }
-    val maxX = (windowSize.width - plateWidth - marginPx).coerceAtLeast(marginPx)
-    val maxY = (windowSize.height - plateHeight - marginPx).coerceAtLeast(marginPx)
-    x = x.coerceIn(marginPx, maxX)
-    y = y.coerceIn(marginPx, maxY)
-    return IntOffset(x - shadowPadPx, y - shadowPadPx)
+    val rawCenter = anchorBounds.left + ((selLeft + selRight) / 2f).toInt()
+    val low = marginPx + reserved.width / 2
+    val high = windowSize.width - marginPx - reserved.width / 2
+    val centerX = if (low <= high) {
+        rawCenter.coerceIn(low, high)
+    } else {
+        // The reserved plate is wider than the window. Stay inside the window
+        // without clamping against the page that happens to be showing.
+        rawCenter.coerceIn(0, windowSize.width.coerceAtLeast(0))
+    }
+    val x = centerX - plateWidth / 2 - shadowPadPx
+    val above = anchorBounds.top + selTop - gapPx - reserved.height >= marginPx
+    val y = if (above) {
+        val bottom = anchorBounds.top + selTop.toInt() - gapPx
+        val minBottom = marginPx + reserved.height
+        val maxBottom = windowSize.height - marginPx
+        val clamped = if (minBottom <= maxBottom) bottom.coerceIn(minBottom, maxBottom) else bottom
+        clamped - plateHeight - shadowPadPx
+    } else {
+        val top = anchorBounds.top + selBottom.toInt() + gapPx + 18
+        val minTop = marginPx
+        val maxTop = windowSize.height - marginPx - reserved.height
+        val clamped = if (minTop <= maxTop) {
+            top.coerceIn(minTop, maxTop)
+        } else {
+            top.coerceIn(0, windowSize.height.coerceAtLeast(0))
+        }
+        clamped - shadowPadPx
+    }
+    return IntOffset(x, y)
 }
 
 /**
@@ -297,10 +469,18 @@ private fun PrimaryMenu(
     onPaste: () -> Unit,
     onMore: () -> Unit,
 ) {
+    // Labels take only the width left after the divider and the ⋮ button.
+    // Those two have no weight, so Row measures them first and cannot
+    // collapse the button into a stick when the labels are wide.
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-        BubbleLabel("Вырезать", onCut)
-        BubbleLabel("Копировать", onCopy)
-        if (canPaste) BubbleLabel("Вставить", onPaste)
+        Row(
+            modifier = Modifier.weight(1f, fill = false),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BubbleLabel("Вырезать", onCut)
+            BubbleLabel("Копировать", onCopy)
+            if (canPaste) BubbleLabel("Вставить", onPaste)
+        }
         Box(
             modifier = Modifier
                 .padding(horizontal = 4.dp)
@@ -332,10 +512,13 @@ private fun BubbleLabel(text: String, onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         fontFamily = NotesFont,
         fontWeight = FontWeight.Medium,
         fontSize = 15.sp,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
         color = MaterialTheme.colorScheme.onSurface,
     )
 }
@@ -354,54 +537,105 @@ private fun OverflowMenu(
     onPlain: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val scroll = rememberScrollState()
+    val plate = MaterialTheme.colorScheme.surface
     BoxWithConstraints(Modifier.widthIn(min = 212.dp, max = 280.dp)) {
         // A popup can be measured with an infinite max. Scroll needs a finite cap.
-        val menuMax = if (maxHeight.value.isFinite()) maxHeight else 480.dp
+        val finiteHeight = maxHeight.value.isFinite()
+        val backBlockDp = BackRowHeight.value + OverflowDividerTop.value + OverflowDividerHeight.value
+        val visibleRows = if (finiteHeight) {
+            overflowVisibleRows(maxHeight.value, OverflowRowHeight.value, backBlockDp)
+        } else {
+            6
+        }
         Column(
             Modifier
                 .fillMaxWidth()
-                .heightIn(max = menuMax)
-                .verticalScroll(rememberScrollState()),
+                .then(if (finiteHeight) Modifier else Modifier.heightIn(max = 480.dp)),
         ) {
-        OverflowLabel("Выбрать всё", onClick = onSelectAll)
-        OverflowLabel("Жирный", checked = MarkStyle.BOLD in activeStyles, onClick = onBold)
-        OverflowLabel("Курсив", checked = MarkStyle.ITALIC in activeStyles, onClick = onItalic)
-        OverflowLabel("Зачёркнутый", checked = MarkStyle.STRIKE in activeStyles, onClick = onStrike)
-        OverflowLabel("Подчёркнутый", checked = MarkStyle.UNDERLINE in activeStyles, onClick = onUnderline)
-        OverflowLabel("Моно", checked = MarkStyle.MONO in activeStyles, onClick = onMono)
-        OverflowLabel("Ссылка", checked = MarkStyle.LINK in activeStyles, onClick = onLink)
-        OverflowLabel("Скрытый", checked = MarkStyle.HIDDEN in activeStyles, onClick = onHidden)
-        OverflowLabel("Обычный", onClick = onPlain)
-        Box(
-            Modifier
-                .padding(top = 2.dp)
-                .fillMaxWidth()
-                .height(0.6.dp)
-                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(OverflowRowHeight * visibleRows)
+                    .menuScrollFades(scroll, plate),
+            ) {
+                Column(Modifier.verticalScroll(scroll)) {
+                    OverflowLabel("Выбрать всё", onClick = onSelectAll)
+                    OverflowLabel("Обычный", onClick = onPlain)
+                    OverflowLabel("Жирный", checked = MarkStyle.BOLD in activeStyles, onClick = onBold)
+                    OverflowLabel("Курсив", checked = MarkStyle.ITALIC in activeStyles, onClick = onItalic)
+                    OverflowLabel("Подчёркнутый", checked = MarkStyle.UNDERLINE in activeStyles, onClick = onUnderline)
+                    OverflowLabel("Скрытый", checked = MarkStyle.HIDDEN in activeStyles, onClick = onHidden)
+                    OverflowLabel("Зачёркнутый", checked = MarkStyle.STRIKE in activeStyles, onClick = onStrike)
+                    OverflowLabel("Моно", checked = MarkStyle.MONO in activeStyles, onClick = onMono)
+                    OverflowLabel("Ссылка", checked = MarkStyle.LINK in activeStyles, onClick = onLink)
+                }
+            }
+            Box(
+                Modifier
+                    .padding(top = OverflowDividerTop)
+                    .fillMaxWidth()
+                    .height(OverflowDividerHeight)
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(BackRowHeight)
+                    .clickable(onClick = onBack)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Назад",
+                    fontFamily = NotesFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Fades the plate color over the scroll edges that still have hidden rows.
+ * Drawn with the content, so a hidden menu does not animate and nothing is
+ * rendered into an offscreen layer.
+ */
+private fun Modifier.menuScrollFades(scroll: ScrollState, plate: Color): Modifier = drawWithContent {
+    drawContent()
+    val fadePx = 12.dp.toPx()
+    if (fadePx <= 0f) return@drawWithContent
+    if (scroll.canScrollForward) {
+        val top = (size.height - fadePx).coerceAtLeast(0f)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(plate.copy(alpha = 0f), plate),
+                startY = top,
+                endY = size.height,
+            ),
+            topLeft = Offset(0f, top),
+            size = Size(size.width, size.height - top),
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onBack)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.AutoMirrored.Outlined.ArrowBack,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                "Назад",
-                fontFamily = NotesFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-        }
+    }
+    if (scroll.canScrollBackward) {
+        val height = fadePx.coerceAtMost(size.height)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(plate, plate.copy(alpha = 0f)),
+                startY = 0f,
+                endY = height,
+            ),
+            size = Size(size.width, height),
+        )
     }
 }
 
@@ -414,8 +648,9 @@ private fun OverflowLabel(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .height(OverflowRowHeight)
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

@@ -35,6 +35,8 @@ internal class BlockSurfaceHandlers(
      */
     val onGestureSettle: (cleared: Boolean, collapsedAtDown: Boolean, root: Offset?) -> Unit =
         { _, _, _ -> },
+    /** Root coordinates. True when the point lands on this block's text. */
+    val bounds: (Offset) -> Boolean = { false },
 )
 
 /**
@@ -45,10 +47,20 @@ internal class BlockSurfaceHandlers(
  */
 internal class NoteSurfaceBridge {
     var toRoot: (Offset) -> Offset? = { null }
+    var onEmptyTap: (Offset) -> Unit = {}
 
     private val blocks = mutableMapOf<Int, BlockSurfaceHandlers>()
+    private val bodyDownListeners = mutableListOf<() -> Unit>()
     private var atDown: SelectionSnapshot = SelectionSnapshot.Collapsed
     private var downIndex: Int? = null
+
+    fun addBodyDownListener(listener: () -> Unit) {
+        if (listener !in bodyDownListeners) bodyDownListeners.add(listener)
+    }
+
+    fun removeBodyDownListener(listener: () -> Unit) {
+        bodyDownListeners.remove(listener)
+    }
 
     fun register(blockIndex: Int, handlers: BlockSurfaceHandlers) {
         blocks[blockIndex] = handlers
@@ -72,9 +84,17 @@ internal class NoteSurfaceBridge {
     }
 
     fun down() {
+        for (listener in bodyDownListeners) listener()
         val index = activeIndex()
         downIndex = index
         atDown = index?.let { blocks[it]?.readSelection() } ?: SelectionSnapshot.Collapsed
+    }
+
+    fun hitsTextBlock(root: Offset): Boolean {
+        for (handlers in blocks.values) {
+            if (handlers.bounds(root)) return true
+        }
+        return false
     }
 
     fun up(
@@ -84,25 +104,29 @@ internal class NoteSurfaceBridge {
         touchSlop: Float,
         longPressTimeoutMillis: Long,
     ) {
-        val handlers = downIndex?.let { blocks[it] } ?: return
-        val selection = atDown
         val root = toRoot(local)
-        val inside = if (selection.collapsed || root == null) {
-            true
-        } else {
-            handlers.pointInside(root, selection)
+        val handlers = downIndex?.let { blocks[it] }
+        if (handlers != null) {
+            val selection = atDown
+            val inside = if (selection.collapsed || root == null) {
+                true
+            } else {
+                handlers.pointInside(root, selection)
+            }
+            val clear = shouldClearSelectionOnUp(
+                collapsedAtDown = selection.collapsed,
+                dragDistance = dragDistance,
+                touchSlop = touchSlop,
+                elapsedMillis = elapsedMillis,
+                longPressTimeoutMillis = longPressTimeoutMillis,
+                insideSelection = inside,
+            )
+            val didClear = clear && root != null
+            if (didClear) handlers.onClear(root, selection)
+            handlers.onGestureSettle(didClear, selection.collapsed, root)
         }
-        val clear = shouldClearSelectionOnUp(
-            collapsedAtDown = selection.collapsed,
-            dragDistance = dragDistance,
-            touchSlop = touchSlop,
-            elapsedMillis = elapsedMillis,
-            longPressTimeoutMillis = longPressTimeoutMillis,
-            insideSelection = inside,
-        )
-        val didClear = clear && root != null
-        if (didClear) handlers.onClear(root, selection)
-        handlers.onGestureSettle(didClear, selection.collapsed, root)
+        val tap = dragDistance <= touchSlop && elapsedMillis < longPressTimeoutMillis
+        if (tap && root != null && !hitsTextBlock(root)) onEmptyTap(root)
     }
 }
 

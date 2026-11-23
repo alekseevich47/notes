@@ -7,9 +7,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -56,16 +56,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.BlockKind
 import com.alekseevich47.notes.domain.EditKind
@@ -95,6 +99,7 @@ private enum class HiddenPinStage { UNLOCK, CREATE, CONFIRM }
 
 private data class CaretRequest(val token: Int = 0, val blockIndex: Int = 0, val offset: Int = 0)
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditorScreen(
     noteId: Long,
@@ -118,8 +123,8 @@ fun EditorScreen(
     var draftPin by remember { mutableStateOf<String?>(null) }
     val formats = remember { NoteEditorController() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val scroll = rememberScrollState()
-    val bodyTap = remember { MutableInteractionSource() }
     var insertBlock by remember { mutableIntStateOf(0) }
     var insertCursor by remember { mutableIntStateOf(0) }
     var caretRequest by remember { mutableStateOf(CaretRequest()) }
@@ -205,6 +210,24 @@ fun EditorScreen(
             val structure = remember(flow) { flow.count { it.kind == BlockKind.TABLE } to flow.size }
             val lastText = remember(flow) { flow.indexOfLast { it.kind == BlockKind.TEXT } }
             val requesters = remember(current.id, structure) { List(flow.size) { FocusRequester() } }
+            val focusLastTextBlockAtEnd = {
+                if (lastText >= 0) {
+                    val length = flow.getOrNull(lastText)?.text?.length ?: 0
+                    caretRequest = CaretRequest(
+                        token = caretRequest.token + 1,
+                        blockIndex = lastText,
+                        offset = length,
+                    )
+                    runCatching { requesters.getOrNull(lastText)?.requestFocus() }
+                    keyboard?.show()
+                }
+            }
+            SideEffect {
+                surface.onEmptyTap = {
+                    AppLog.i("EditorFocus", "empty tap")
+                    focusLastTextBlockAtEnd()
+                }
+            }
             val focusFirstTextBlock = {
                 val index = flow.indexOfFirst { it.kind == BlockKind.TEXT }
                 if (index >= 0) {
@@ -315,15 +338,12 @@ fun EditorScreen(
                         .heightIn(min = minBody)
                         .onGloballyPositioned { bodyCoords = it }
                         .observeSelectionTaps(surface)
-                        .clickable(
-                            interactionSource = bodyTap,
-                            indication = null,
-                            onClickLabel = "Ваш текст",
-                            onClick = {
-                                requesters.getOrNull(lastText)?.requestFocus()
-                                keyboard?.show()
-                            },
-                        ),
+                        .semantics {
+                            onClick(label = "Ваш текст") {
+                                focusLastTextBlockAtEnd()
+                                true
+                            }
+                        },
                 ) {
                     Column(Modifier.fillMaxWidth()) {
                         flow.forEachIndexed { index, block ->
@@ -368,6 +388,8 @@ fun EditorScreen(
                                                 onDelete = onDelete,
                                                 onAskTable = onAskTable,
                                                 onRequestUnlock = onRequestUnlock,
+                                                pinDialogVisible = askPin,
+                                                surface = surface,
                                             )
                                         }
                                     }
@@ -523,7 +545,31 @@ fun EditorScreen(
             onDismiss = { askTable = false },
         )
     }
+    val screenDialog = askPin || askTable || confirmDelete
+    if (formats.screenDialogOpen != screenDialog) formats.screenDialogOpen = screenDialog
+    val dialogOpen = rememberUpdatedState(formats.dialogOpen)
+    val imeVisible = WindowInsets.isImeVisible
+    var imeWasShown by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible) {
+        val clear = shouldClearFocusAfterImeHide(
+            wasShown = imeWasShown,
+            visible = imeVisible,
+            dialogOpen = dialogOpen.value,
+        )
+        if (imeVisible) imeWasShown = true
+        if (clear) {
+            AppLog.i("EditorFocus", "ime hide clears focus")
+            focusManager.clearFocus()
+        }
+        if (!imeVisible) imeWasShown = false
+    }
 }
+
+internal fun shouldClearFocusAfterImeHide(
+    wasShown: Boolean,
+    visible: Boolean,
+    dialogOpen: Boolean,
+): Boolean = wasShown && !visible && !dialogOpen
 
 private fun textPlaceholder(flow: List<NoteBlock>, index: Int): String {
     val block = flow[index]
