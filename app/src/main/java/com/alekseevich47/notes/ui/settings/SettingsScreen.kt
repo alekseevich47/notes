@@ -84,7 +84,6 @@ fun SettingsScreen(
         Spacer(Modifier.height(18.dp))
         SectionLabel("Тема")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThemeChip("Как в системе", theme == ThemeMode.SYSTEM) { viewModel.setTheme(ThemeMode.SYSTEM) }
             ThemeChip("Светлая", theme == ThemeMode.LIGHT) { viewModel.setTheme(ThemeMode.LIGHT) }
             ThemeChip("Тёмная", theme == ThemeMode.DARK) { viewModel.setTheme(ThemeMode.DARK) }
         }

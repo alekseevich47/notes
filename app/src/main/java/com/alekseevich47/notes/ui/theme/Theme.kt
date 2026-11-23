@@ -1,7 +1,6 @@
 package com.alekseevich47.notes.ui.theme
 
 import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -78,11 +77,7 @@ fun NotesTheme(
     themeMode: ThemeMode,
     content: @Composable () -> Unit,
 ) {
-    val dark = when (themeMode) {
-        ThemeMode.DARK -> true
-        ThemeMode.LIGHT -> false
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-    }
+    val dark = themeMode == ThemeMode.DARK
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {

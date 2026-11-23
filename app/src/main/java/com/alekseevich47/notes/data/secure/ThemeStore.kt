@@ -2,6 +2,7 @@ package com.alekseevich47.notes.data.secure
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import com.alekseevich47.notes.domain.ThemeMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,8 +32,16 @@ class ThemeStore @Inject constructor(
         val plainContains = prefs.contains(NotesPrefs.THEME_MODE)
         val plainRaw = if (plainContains) prefs.getString(NotesPrefs.THEME_MODE, null) else null
         val legacyRaw = if (plainContains) null else readLegacyThemeName(context)
-        val decoded = ThemeModePrefs.decode(ThemeModePrefs.rawToKeep(plainContains, plainRaw, legacyRaw))
+        val systemDark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val decoded = ThemeModePrefs.decode(
+            ThemeModePrefs.rawToKeep(plainContains, plainRaw, legacyRaw),
+            systemDark,
+        )
         if (!plainContains) {
+            prefs.edit().putString(NotesPrefs.THEME_MODE, decoded.name).commit()
+        }
+        if (plainRaw == "SYSTEM") {
             prefs.edit().putString(NotesPrefs.THEME_MODE, decoded.name).commit()
         }
         return decoded

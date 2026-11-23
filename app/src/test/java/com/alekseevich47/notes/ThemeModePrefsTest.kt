@@ -8,18 +8,19 @@ import org.junit.Test
 
 class ThemeModePrefsTest {
     @Test
-    fun unknownOrMissingValuesFallBackToSystem() {
-        assertEquals(ThemeMode.SYSTEM, ThemeModePrefs.decode(null))
-        assertEquals(ThemeMode.SYSTEM, ThemeModePrefs.decode(""))
-        assertEquals(ThemeMode.SYSTEM, ThemeModePrefs.decode("FUTURE"))
-        assertEquals(ThemeMode.SYSTEM, ThemeModePrefs.decode("light"))
+    fun unknownOrMissingValuesFollowTheCurrentSystemTheme() {
+        listOf(null, "", "FUTURE", "light", "SYSTEM").forEach { raw ->
+            assertEquals(ThemeMode.LIGHT, ThemeModePrefs.decode(raw, systemDark = false))
+            assertEquals(ThemeMode.DARK, ThemeModePrefs.decode(raw, systemDark = true))
+        }
     }
 
     @Test
-    fun knownNamesDecode() {
-        assertEquals(ThemeMode.SYSTEM, ThemeModePrefs.decode("SYSTEM"))
-        assertEquals(ThemeMode.LIGHT, ThemeModePrefs.decode("LIGHT"))
-        assertEquals(ThemeMode.DARK, ThemeModePrefs.decode("DARK"))
+    fun knownNamesIgnoreTheSystemTheme() {
+        assertEquals(ThemeMode.LIGHT, ThemeModePrefs.decode("LIGHT", systemDark = false))
+        assertEquals(ThemeMode.LIGHT, ThemeModePrefs.decode("LIGHT", systemDark = true))
+        assertEquals(ThemeMode.DARK, ThemeModePrefs.decode("DARK", systemDark = false))
+        assertEquals(ThemeMode.DARK, ThemeModePrefs.decode("DARK", systemDark = true))
     }
 
     @Test

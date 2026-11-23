@@ -21,7 +21,7 @@ import java.util.Locale
 
 enum class MicPhase { IDLE, RECORDING, PROCESSING, DONE }
 
-enum class ThemeMode { SYSTEM, LIGHT, DARK }
+enum class ThemeMode { LIGHT, DARK }
 
 enum class MarkStyle { BOLD, ITALIC, STRIKE, UNDERLINE, HIDDEN, MONO, LINK }
 
