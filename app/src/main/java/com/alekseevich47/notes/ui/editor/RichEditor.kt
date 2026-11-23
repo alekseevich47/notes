@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.SideEffect
@@ -346,30 +347,62 @@ internal fun RichNoteEditor(
         field = field.copy(selection = TextRange(0, field.text.length))
     }
 
+    DisposableEffect(surface, blockIndex) {
+        onDispose { surface.unregister(blockIndex) }
+    }
     SideEffect {
-        surface.readSelection = { SelectionSnapshot(field.selection.start, field.selection.end) }
-        surface.pointInside = { root, selection ->
-            val coords = textCoordinates
-            val result = layout
-            if (coords == null || !coords.isAttached || result == null) {
-                false
-            } else {
-            val local = root - coords.localToRoot(Offset.Zero)
-            val start = min(selection.start, selection.end)
-            val end = max(selection.start, selection.end)
-            pointInsideSelection(local.x, local.y, bandsFor(result, start, end))
-            }
-        }
-        surface.onClear = { root, _ ->
-            val coords = textCoordinates
-            val result = layout
-            if (coords == null || !coords.isAttached || result == null) {
-                collapseSelection()
-            } else {
-                val local = root - coords.localToRoot(Offset.Zero)
-                placeCaret(result.getOffsetForPosition(local))
-            }
-        }
+        surface.register(
+            blockIndex,
+            BlockSurfaceHandlers(
+                focused = blockFocused,
+                readSelection = { SelectionSnapshot(field.selection.start, field.selection.end) },
+                pointInside = { root, selection ->
+                    val coords = textCoordinates
+                    val result = layout
+                    if (coords == null || !coords.isAttached || result == null) {
+                        false
+                    } else {
+                        val local = root - coords.localToRoot(Offset.Zero)
+                        val start = min(selection.start, selection.end)
+                        val end = max(selection.start, selection.end)
+                        pointInsideSelection(local.x, local.y, bandsFor(result, start, end))
+                    }
+                },
+                onClear = { root, _ ->
+                    val coords = textCoordinates
+                    val result = layout
+                    if (coords == null || !coords.isAttached || result == null) {
+                        collapseSelection()
+                    } else {
+                        val local = root - coords.localToRoot(Offset.Zero)
+                        placeCaret(result.getOffsetForPosition(local))
+                    }
+                },
+                onGestureSettle = settle@{ cleared, collapsedAtDown, root ->
+                    if (cleared || !collapsedAtDown || root == null) {
+                        if (cleared) {
+                            toolbar.suppressPlatform = true
+                            releasePlatformMenu = false
+                        }
+                        return@settle
+                    }
+                    val coords = textCoordinates
+                    val result = layout
+                    if (coords == null || !coords.isAttached || result == null) return@settle
+                    val local = root - coords.localToRoot(Offset.Zero)
+                    if (
+                        pointInsideTextBounds(
+                            local.x,
+                            local.y,
+                            result.size.width.toFloat(),
+                            result.size.height.toFloat(),
+                        )
+                    ) {
+                        releasePlatformMenu = true
+                    }
+                },
+            ),
+        )
         if (blockFocused && !formats.editingCell) {
             formats.bold = { applyMark(MarkStyle.BOLD) }
             formats.italic = { applyMark(MarkStyle.ITALIC) }
@@ -384,29 +417,6 @@ internal fun RichNoteEditor(
             }
             formats.activeStyles = stylesTouching(marks, field.selection)
             formats.listActive = lineNumbered(field.text, field.selection.min)
-        }
-        surface.onGestureSettle = settle@{ cleared, collapsedAtDown, root ->
-            if (cleared || !collapsedAtDown || root == null) {
-                if (cleared) {
-                    toolbar.suppressPlatform = true
-                    releasePlatformMenu = false
-                }
-                return@settle
-            }
-            val coords = textCoordinates
-            val result = layout
-            if (coords == null || !coords.isAttached || result == null) return@settle
-            val local = root - coords.localToRoot(Offset.Zero)
-            if (
-                pointInsideTextBounds(
-                    local.x,
-                    local.y,
-                    result.size.width.toFloat(),
-                    result.size.height.toFloat(),
-                )
-            ) {
-                releasePlatformMenu = true
-            }
         }
     }
     toolbar.onSelectionGestureEnded = {

@@ -20,28 +20,61 @@ internal data class SelectionSnapshot(val start: Int, val end: Int) {
 }
 
 /**
- * Bridge between the note body (which sees every tap, including empty space
- * under the text) and the editor (which owns the selection and layout).
- * Lambdas are replaced on each composition so a long-lived pointer coroutine
- * always reads the latest layout.
+ * Handlers for one text block. [RichNoteEditor] refreshes the instance on each
+ * composition so a long-lived pointer coroutine reads the latest layout.
+ * [focused] wins over a non-empty selection in another block.
  */
-internal class NoteSurfaceBridge {
-    var toRoot: (Offset) -> Offset? = { null }
-    var readSelection: () -> SelectionSnapshot = { SelectionSnapshot.Collapsed }
-    var pointInside: (Offset, SelectionSnapshot) -> Boolean = { _, _ -> true }
-    var onClear: (Offset, SelectionSnapshot) -> Unit = { _, _ -> }
-
+internal class BlockSurfaceHandlers(
+    val focused: Boolean = false,
+    val readSelection: () -> SelectionSnapshot = { SelectionSnapshot.Collapsed },
+    val pointInside: (Offset, SelectionSnapshot) -> Boolean = { _, _ -> true },
+    val onClear: (Offset, SelectionSnapshot) -> Unit = { _, _ -> },
     /**
      * Finger-up on the note body. [cleared] is true when this gesture collapsed
      * the selection. [root] is null when the body is not attached.
      */
-    var onGestureSettle: (cleared: Boolean, collapsedAtDown: Boolean, root: Offset?) -> Unit =
-        { _, _, _ -> }
+    val onGestureSettle: (cleared: Boolean, collapsedAtDown: Boolean, root: Offset?) -> Unit =
+        { _, _, _ -> },
+)
 
+/**
+ * Bridge between the note body (which sees every tap, including empty space
+ * under the text) and every text block. Each block registers under its flow
+ * index. A tap is dispatched to the focused block, or, when nothing is
+ * focused, to the block with a non-collapsed selection.
+ */
+internal class NoteSurfaceBridge {
+    var toRoot: (Offset) -> Offset? = { null }
+
+    private val blocks = mutableMapOf<Int, BlockSurfaceHandlers>()
     private var atDown: SelectionSnapshot = SelectionSnapshot.Collapsed
+    private var downIndex: Int? = null
+
+    fun register(blockIndex: Int, handlers: BlockSurfaceHandlers) {
+        blocks[blockIndex] = handlers
+    }
+
+    fun unregister(blockIndex: Int) {
+        blocks.remove(blockIndex)
+        if (downIndex == blockIndex) downIndex = null
+    }
+
+    /** Focused block wins. Otherwise the lowest index with a ranged selection. */
+    private fun activeIndex(): Int? {
+        var focused: Int? = null
+        var selected: Int? = null
+        for ((index, handlers) in blocks) {
+            if (handlers.focused && (focused == null || index < focused)) focused = index
+            val selection = handlers.readSelection()
+            if (!selection.collapsed && (selected == null || index < selected)) selected = index
+        }
+        return focused ?: selected
+    }
 
     fun down() {
-        atDown = readSelection()
+        val index = activeIndex()
+        downIndex = index
+        atDown = index?.let { blocks[it]?.readSelection() } ?: SelectionSnapshot.Collapsed
     }
 
     fun up(
@@ -51,12 +84,13 @@ internal class NoteSurfaceBridge {
         touchSlop: Float,
         longPressTimeoutMillis: Long,
     ) {
+        val handlers = downIndex?.let { blocks[it] } ?: return
         val selection = atDown
         val root = toRoot(local)
         val inside = if (selection.collapsed || root == null) {
             true
         } else {
-            pointInside(root, selection)
+            handlers.pointInside(root, selection)
         }
         val clear = shouldClearSelectionOnUp(
             collapsedAtDown = selection.collapsed,
@@ -67,8 +101,8 @@ internal class NoteSurfaceBridge {
             insideSelection = inside,
         )
         val didClear = clear && root != null
-        if (didClear) onClear(root, selection)
-        onGestureSettle(didClear, selection.collapsed, root)
+        if (didClear) handlers.onClear(root, selection)
+        handlers.onGestureSettle(didClear, selection.collapsed, root)
     }
 }
 

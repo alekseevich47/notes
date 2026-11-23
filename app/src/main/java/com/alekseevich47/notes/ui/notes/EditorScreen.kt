@@ -317,7 +317,6 @@ fun EditorScreen(
                                         formats = formats,
                                         pinDialogVisible = askPin,
                                         surface = surface,
-                                        useSharedSurface = index == 0,
                                         onText = onBlockText,
                                         onNeedSelection = onNeedSelection,
                                         onRequestUnlock = onRequestUnlock,
@@ -518,7 +517,6 @@ private fun NoteTextBlock(
     formats: NoteEditorController,
     pinDialogVisible: Boolean,
     surface: NoteSurfaceBridge,
-    useSharedSurface: Boolean,
     onText: (Int, String, List<TextMark>, EditKind, Int, Int) -> Unit,
     onNeedSelection: () -> Unit,
     onRequestUnlock: () -> Unit,
@@ -529,9 +527,8 @@ private fun NoteTextBlock(
     caretOffset: Int = 0,
     listStart: Int = 1,
 ) {
-    val bridge = remember(noteId, blockIndex) { NoteSurfaceBridge() }
     val publishText = rememberUpdatedState(onText)
-    val onDocument = remember(blockIndex) {
+    val onDocument = remember(noteId, blockIndex) {
         { nextText: String, nextMarks: List<TextMark>, kind: EditKind, before: Int, after: Int ->
             publishText.value(blockIndex, nextText, nextMarks, kind, before, after)
         }
@@ -548,7 +545,7 @@ private fun NoteTextBlock(
         focusRequester = focusRequester,
         formats = formats,
         pinDialogVisible = pinDialogVisible,
-        surface = if (useSharedSurface) surface else bridge,
+        surface = surface,
         modifier = Modifier.padding(horizontal = 20.dp),
         blockIndex = blockIndex,
         placeholder = placeholder,
