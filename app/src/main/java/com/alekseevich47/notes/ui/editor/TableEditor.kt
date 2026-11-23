@@ -840,17 +840,18 @@ private fun TableCellEditor(
         color = ink,
         textAlign = textAlign(h),
     )
-    val spoiler = rememberSpoilerPaint(
-        text = field.text,
-        marks = marks,
-        style = cellStyle,
-        ink = ink,
-        widthPx = if (!hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }) {
-            layout?.size?.width ?: 0
-        } else {
-            0
-        },
-    )
+    val cellLocked = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }
+    val spoilerModifier = if (cellLocked) {
+        lockedSpoilerModifier(
+            text = field.text,
+            marks = marks,
+            style = cellStyle,
+            ink = ink,
+            widthPx = layout?.size?.width ?: 0,
+        )
+    } else {
+        Modifier
+    }
     val pad = with(LocalDensity.current) { 8.dp.toPx() }
     val layoutState = androidx.compose.runtime.rememberUpdatedState(layout)
     Box(
@@ -913,13 +914,7 @@ private fun TableCellEditor(
                 modifier = Modifier
                     .fillMaxWidth()
                     .onFocusChanged { state -> onFocused(state.isFocused) }
-                    .then(
-                        if (!hiddenUnlocked) {
-                            Modifier.drawSpoilerShadows(spoiler, marks, ink)
-                        } else {
-                            Modifier
-                        },
-                    ),
+                    .then(spoilerModifier),
                 textStyle = cellStyle,
                 cursorBrush = SolidColor(NotesPurple),
                 keyboardOptions = KeyboardOptions(

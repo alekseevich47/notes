@@ -192,18 +192,21 @@ internal fun RichNoteEditor(
     val platformToolbar = LocalTextToolbar.current
     val toolbar = remember { RoutingTextToolbar(platformToolbar) }
     val ink = MaterialTheme.colorScheme.onSurface
-    val censorLayout = layout
     val censor = !hiddenUnlocked && marks.any { it.style == MarkStyle.HIDDEN }
-    val spoiler = rememberSpoilerPaint(
-        text = field.text,
-        marks = marks,
-        style = MaterialTheme.typography.bodyLarge.copy(
-            color = ink,
-            fontFamily = NotesFont,
-        ),
-        ink = ink,
-        widthPx = if (censor) censorLayout?.size?.width ?: 0 else 0,
-    )
+    val spoilerModifier = if (censor) {
+        lockedSpoilerModifier(
+            text = field.text,
+            marks = marks,
+            style = MaterialTheme.typography.bodyLarge.copy(
+                color = ink,
+                fontFamily = NotesFont,
+            ),
+            ink = ink,
+            widthPx = layout?.size?.width ?: 0,
+        )
+    } else {
+        Modifier
+    }
     if (field.selection.collapsed && (menuOverflow || menuVisible)) {
         menuOverflow = false
         menuVisible = false
@@ -537,7 +540,7 @@ internal fun RichNoteEditor(
                             }
                             onFocused(it.isFocused)
                         }
-                        .then(if (censor) Modifier.drawSpoilerShadows(spoiler, marks, ink) else Modifier),
+                        .then(spoilerModifier),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = NotesFont,

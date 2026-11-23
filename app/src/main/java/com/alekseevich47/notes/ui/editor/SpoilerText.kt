@@ -96,14 +96,18 @@ fun SpoilerText(
 ) {
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val locked = !revealed && marks.any { it.style == MarkStyle.HIDDEN }
-    val spoiler = rememberSpoilerPaint(
-        text = text.text,
-        marks = marks,
-        style = style,
-        ink = color,
-        widthPx = if (locked) layout?.size?.width ?: 0 else 0,
-        maxLines = maxLines,
-    )
+    val blur = if (locked) {
+        lockedSpoilerModifier(
+            text = text.text,
+            marks = marks,
+            style = style,
+            ink = color,
+            widthPx = layout?.size?.width ?: 0,
+            maxLines = maxLines,
+        )
+    } else {
+        Modifier
+    }
     Text(
         text = text,
         color = color,
@@ -111,8 +115,32 @@ fun SpoilerText(
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         onTextLayout = { layout = it },
-        modifier = if (locked) modifier.drawSpoilerShadows(spoiler, marks, color) else modifier,
+        modifier = modifier.then(blur),
     )
+}
+
+/**
+ * Measures and paints locked hidden text. Call this only from `if (locked)`
+ * so a plain keystroke does not rebuild the spoiler layout.
+ */
+@Composable
+internal fun lockedSpoilerModifier(
+    text: String,
+    marks: List<TextMark>,
+    style: TextStyle,
+    ink: Color,
+    widthPx: Int,
+    maxLines: Int = Int.MAX_VALUE,
+): Modifier {
+    val paint = rememberSpoilerPaint(
+        text = text,
+        marks = marks,
+        style = style,
+        ink = ink,
+        widthPx = widthPx,
+        maxLines = maxLines,
+    )
+    return Modifier.drawSpoilerShadows(paint, marks, ink)
 }
 
 /**
