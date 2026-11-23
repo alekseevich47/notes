@@ -2,8 +2,10 @@ package com.alekseevich47.notes.data.repository
 
 import android.content.Context
 import android.util.LruCache
+import androidx.room.withTransaction
 import com.alekseevich47.notes.data.local.NoteDao
 import com.alekseevich47.notes.data.local.NoteEntity
+import com.alekseevich47.notes.data.local.NotesDatabase
 import com.alekseevich47.notes.data.secure.NotesPrefs
 import com.alekseevich47.notes.domain.Note
 import com.alekseevich47.notes.domain.NoteDocument
@@ -26,6 +28,7 @@ import javax.inject.Singleton
 @Singleton
 class NotesRepository @Inject constructor(
     private val dao: NoteDao,
+    private val database: NotesDatabase,
     @ApplicationContext private val context: Context,
 ) {
     private val listItems = LruCache<Long, Pair<Long, NoteListItem>>(256)
@@ -122,6 +125,20 @@ class NotesRepository @Inject constructor(
         val row = dao.get(id)
         row?.audioPath?.let { path -> runCatching { File(path).delete() } }
         dao.delete(id)
+    }
+
+    suspend fun deleteMany(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val idList = ids.toList()
+        val rows = dao.getByIds(idList)
+        withContext(Dispatchers.IO) {
+            for (row in rows) {
+                row.audioPath?.let { path -> runCatching { File(path).delete() } }
+            }
+        }
+        database.withTransaction {
+            dao.deleteByIds(idList)
+        }
     }
 
     private fun NoteEntity.toListItem(): NoteListItem {

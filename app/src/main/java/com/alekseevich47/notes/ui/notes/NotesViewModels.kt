@@ -73,9 +73,7 @@ class NotesViewModel @Inject constructor(
 
     fun deleteMany(ids: Collection<Long>) {
         if (ids.isEmpty()) return
-        viewModelScope.launch {
-            ids.forEach { repository.delete(it) }
-        }
+        viewModelScope.launch { repository.deleteMany(ids) }
     }
 }
 

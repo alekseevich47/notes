@@ -31,6 +31,12 @@ interface NoteDao {
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun delete(id: Long)
 
+    @Query("SELECT * FROM notes WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<NoteEntity>
+
+    @Query("DELETE FROM notes WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
     @Query("SELECT COALESCE(MAX(seq), 0) FROM notes")
     suspend fun maxSeq(): Int
 
