@@ -68,17 +68,22 @@ object BugReportMailer {
     }
 
     fun launch(context: Context, prepared: PreparedReport) {
-        val send = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        val hasAttachments = prepared.attachments.isNotEmpty()
+        val send = Intent(
+            if (hasAttachments) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND,
+        ).apply {
             type = "message/rfc822"
             putExtra(Intent.EXTRA_EMAIL, arrayOf(SettingsCopy.EMAIL))
             putExtra(Intent.EXTRA_SUBJECT, prepared.subject)
             putExtra(Intent.EXTRA_TEXT, prepared.body)
-            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(prepared.attachments))
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            clipOf(context, prepared.attachments)?.let { clipData = it }
+            if (hasAttachments) {
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(prepared.attachments))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipOf(context, prepared.attachments)?.let { clipData = it }
+            }
         }
         val chooser = Intent.createChooser(send, "Сообщить об ошибке").apply {
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (hasAttachments) addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             send.clipData?.let { clipData = it }
             if (context.findActivity() == null) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
