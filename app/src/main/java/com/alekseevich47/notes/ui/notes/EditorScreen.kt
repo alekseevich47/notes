@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,6 +42,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -53,13 +57,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -82,6 +90,9 @@ import com.alekseevich47.notes.ui.components.AppDialog
 import com.alekseevich47.notes.ui.components.PinDialog
 import com.alekseevich47.notes.ui.components.TableSizeDialog
 import com.alekseevich47.notes.ui.editor.EditorFormatBar
+import com.alekseevich47.notes.ui.editor.LocalSelectionViewport
+import com.alekseevich47.notes.ui.editor.VisibleViewport
+import com.alekseevich47.notes.ui.editor.autoScrollVelocity
 import com.alekseevich47.notes.ui.editor.ListAutoFormat
 import com.alekseevich47.notes.ui.editor.NoteEditorController
 import com.alekseevich47.notes.ui.editor.NoteSurfaceBridge
@@ -91,6 +102,10 @@ import com.alekseevich47.notes.ui.editor.observeSelectionTaps
 import com.alekseevich47.notes.ui.player.MiniPlayer
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.theme.NotesMuted
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -147,8 +162,12 @@ fun EditorScreen(
     }
     val context = LocalContext.current
 
+    val selectionViewport = remember { VisibleViewport() }
+    val density = LocalDensity.current
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
         viewModel.flush()
+        formats.dragging = false
+        formats.autoScrolling = false
     }
     LaunchedEffect(noteId) {
         formats.bodyFocused = false
@@ -218,6 +237,7 @@ fun EditorScreen(
                         blockIndex = lastText,
                         offset = length,
                     )
+                    formats.caretToken++
                     runCatching { requesters.getOrNull(lastText)?.requestFocus() }
                     keyboard?.show()
                 }
@@ -278,7 +298,12 @@ fun EditorScreen(
             BoxWithConstraints(
                 Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        val bounds = coordinates.boundsInWindow()
+                        selectionViewport.top = bounds.top.toInt()
+                        selectionViewport.bottom = bounds.bottom.toInt()
+                    },
             ) {
                 val minBody = maxHeight
                 val noteNow = rememberUpdatedState(current)
@@ -331,6 +356,7 @@ fun EditorScreen(
                     }
                 } }
                 val updateTable = remember(viewModel) { viewModel::updateTable }
+                CompositionLocalProvider(LocalSelectionViewport provides selectionViewport) {
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -398,6 +424,7 @@ fun EditorScreen(
                         }
                         Spacer(Modifier.height(24.dp))
                     }
+                }
                 }
             }
             if (current.audioPath != null) {
@@ -547,21 +574,117 @@ fun EditorScreen(
     }
     val screenDialog = askPin || askTable || confirmDelete
     if (formats.screenDialogOpen != screenDialog) formats.screenDialogOpen = screenDialog
+    val imeBottomPx = remember { mutableIntStateOf(0) }
+    val imeNow = WindowInsets.ime.getBottom(density)
+    if (imeBottomPx.intValue != imeNow) imeBottomPx.intValue = imeNow
     val dialogOpen = rememberUpdatedState(formats.dialogOpen)
     val imeVisible = WindowInsets.isImeVisible
     var imeWasShown by remember { mutableStateOf(false) }
-    LaunchedEffect(imeVisible) {
+    LaunchedEffect(imeVisible, formats.tableMenuOpen) {
+        val menuOpen = formats.tableMenuOpen
         val clear = shouldClearFocusAfterImeHide(
             wasShown = imeWasShown,
             visible = imeVisible,
             dialogOpen = dialogOpen.value,
+            tableMenuOpen = menuOpen,
+        )
+        val closeMenu = shouldDismissTableMenuOnImeHide(
+            wasShown = imeWasShown,
+            visible = imeVisible,
+            dialogOpen = dialogOpen.value,
+            tableMenuOpen = menuOpen,
         )
         if (imeVisible) imeWasShown = true
+        if (closeMenu) {
+            formats.requestCloseTableMenu()
+            formats.restoreImeForCell()
+        }
         if (clear) {
             AppLog.i("EditorFocus", "ime hide clears focus")
             focusManager.clearFocus()
         }
         if (!imeVisible) imeWasShown = false
+    }
+    LaunchedEffect(scroll) {
+        snapshotFlow { scroll.isScrollInProgress }.distinctUntilChanged().collect { formats.bodyScrolling = it }
+    }
+    LaunchedEffect(formats.dragging) {
+        if (!formats.dragging) return@LaunchedEffect
+        val zone = with(density) { 56.dp.toPx() }
+        val minSpeed = with(density) { 80.dp.toPx() }
+        val maxSpeed = with(density) { 900.dp.toPx() }
+        var lastFrame = 0L
+        var heldStart = 0L
+        while (isActive && formats.dragging) {
+            val frame = withFrameNanos { it }
+            if (heldStart == 0L) heldStart = frame
+            val dt = if (lastFrame == 0L) 0f else (frame - lastFrame) / 1_000_000_000f
+            lastFrame = frame
+            val rect = formats.activeEdgeRectInWindow()
+            if (rect == null) {
+                formats.autoScrolling = false
+                continue
+            }
+            val velocity = autoScrollVelocity(
+                edgeY = rect.center.y,
+                viewportTop = selectionViewport.top.toFloat(),
+                viewportBottom = selectionViewport.bottom.toFloat(),
+                zonePx = zone,
+                minPxPerSec = minSpeed,
+                maxPxPerSec = maxSpeed,
+                heldMillis = (frame - heldStart) / 1_000_000L,
+            )
+            if (velocity == 0f || dt == 0f) {
+                formats.autoScrolling = false
+                continue
+            }
+            formats.autoScrolling = true
+            val dy = velocity * dt
+            scroll.scrollBy(dy)
+            formats.extendActiveEdge(dy)
+        }
+        formats.autoScrolling = false
+    }
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            Triple(
+                imeBottomPx.intValue,
+                formats.bodyFocused || formats.editingCell,
+                formats.caretToken,
+            )
+        }.distinctUntilChanged().collectLatest {
+            if (formats.dragging) return@collectLatest
+            val started = android.os.SystemClock.uptimeMillis()
+            var last = imeBottomPx.intValue
+            var stable = 0
+            while (android.os.SystemClock.uptimeMillis() - started < 400L) {
+                delay(16)
+                val now = imeBottomPx.intValue
+                stable = if (now == last) stable + 1 else 0
+                last = now
+                if (stable >= 2) break
+            }
+            val rect = formats.caretRectInWindow() ?: return@collectLatest
+            val viewTop = selectionViewport.top
+            val viewBottom = selectionViewport.bottom
+            val viewport = (viewBottom - viewTop).coerceAtLeast(0)
+            val marginPx = with(density) { 48.dp.roundToPx() }
+            val caretBottom = (rect.bottom - viewTop).toInt()
+            val down = revealCaretDelta(
+                scrollValue = 0,
+                viewport = viewport,
+                caretBottom = caretBottom,
+                marginPx = marginPx,
+            )
+            val up = revealCaretUpDelta(
+                caretTop = (rect.top - viewTop).toInt(),
+                marginPx = marginPx,
+            )
+            val delta = if (down > 0) down else -up
+            AppLog.i("EditorFocus", "reveal caret delta=$delta")
+            if (down > 0) scroll.animateScrollBy(down.toFloat(), tween(200))
+            else if (up > 0) scroll.animateScrollBy(-up.toFloat(), tween(200))
+        }
     }
 }
 
@@ -569,7 +692,24 @@ internal fun shouldClearFocusAfterImeHide(
     wasShown: Boolean,
     visible: Boolean,
     dialogOpen: Boolean,
-): Boolean = wasShown && !visible && !dialogOpen
+    tableMenuOpen: Boolean = false,
+): Boolean = wasShown && !visible && !dialogOpen && !tableMenuOpen
+
+/** First back while a table menu is open closes the menu and keeps the keyboard. */
+internal fun shouldDismissTableMenuOnImeHide(
+    wasShown: Boolean,
+    visible: Boolean,
+    dialogOpen: Boolean,
+    tableMenuOpen: Boolean,
+): Boolean = wasShown && !visible && tableMenuOpen && !dialogOpen
+
+/**
+ * How far to scroll up so a caret that sits above the viewport comes back
+ * inside it, with [marginPx] of room under the header.
+ */
+internal fun revealCaretUpDelta(caretTop: Int, marginPx: Int): Int {
+    return (marginPx - caretTop).coerceAtLeast(0)
+}
 
 private fun textPlaceholder(flow: List<NoteBlock>, index: Int): String {
     val block = flow[index]

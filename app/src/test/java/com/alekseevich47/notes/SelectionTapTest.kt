@@ -8,7 +8,6 @@ import com.alekseevich47.notes.ui.editor.pointInsideSelection
 import com.alekseevich47.notes.ui.editor.pointInsideTextBounds
 import com.alekseevich47.notes.ui.editor.selectionBands
 import com.alekseevich47.notes.ui.editor.shouldClearSelectionOnUp
-import com.alekseevich47.notes.ui.editor.shouldOfferPlatformPaste
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -158,42 +157,6 @@ class SelectionTapTest {
         tapOutside(focused)
         assertEquals(1, focusedCleared)
         assertEquals(0, otherCleared)
-    }
-
-    @Test
-    fun platformPasteStaysCollapsedAndSelectAllNeverForwards() {
-        assertFalse(
-            shouldOfferPlatformPaste(
-                hasCopy = true,
-                hasCut = true,
-                hasPaste = true,
-                suppressPlatform = false,
-            ),
-        )
-        assertFalse(
-            shouldOfferPlatformPaste(
-                hasCopy = false,
-                hasCut = false,
-                hasPaste = false,
-                suppressPlatform = false,
-            ),
-        )
-        assertFalse(
-            shouldOfferPlatformPaste(
-                hasCopy = false,
-                hasCut = false,
-                hasPaste = true,
-                suppressPlatform = true,
-            ),
-        )
-        assertTrue(
-            shouldOfferPlatformPaste(
-                hasCopy = false,
-                hasCut = false,
-                hasPaste = true,
-                suppressPlatform = false,
-            ),
-        )
     }
 
     private fun tapHandlers(

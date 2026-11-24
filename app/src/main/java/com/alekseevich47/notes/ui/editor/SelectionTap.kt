@@ -81,19 +81,3 @@ internal fun pointInsideTextBounds(x: Float, y: Float, width: Float, height: Flo
     return width > 0f && height > 0f && x >= 0f && y >= 0f && x <= width && y <= height
 }
 
-/**
- * Platform action mode for a collapsed caret may offer paste. A ranged selection
- * belongs to the in-app menu, and Select all is never forwarded: after a tap
- * outside the highlight, Compose asks for a collapsed menu whose only item is
- * Select all. [suppressPlatform] swallows that request, including paste, until
- * the caret is placed by a later tap on the text.
- */
-internal fun shouldOfferPlatformPaste(
-    hasCopy: Boolean,
-    hasCut: Boolean,
-    hasPaste: Boolean,
-    suppressPlatform: Boolean,
-): Boolean {
-    if (hasCopy || hasCut || suppressPlatform || !hasPaste) return false
-    return true
-}

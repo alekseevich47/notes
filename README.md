@@ -1,6 +1,6 @@
 # Заметки
 
-Голосовые заметки Loomixx. Запись с микрофона, распознавание речи на устройстве и обычный редактор.
+Голосовые заметки Loomixx. Запись с микрофона, распознавание речи на устройстве и редактор с выделением, вставкой и таблицами.
 
 - Package: `com.alekseevich47.notes` (debug: `com.alekseevich47.notes.debug`)
 - minSdk 26, target/compile 35, versionName 1.0.1, versionCode 2

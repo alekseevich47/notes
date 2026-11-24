@@ -37,6 +37,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -44,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -71,10 +74,23 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Telegram-style selection bubble. Primary row is Cut / Copy / Paste / overflow.
- * Paste is shown only when the clipboard has text. The formatting list is
- * Select all, Plain, then the styles, and Back stays put under the scroller.
- * Active styles carry a check. Quote is intentionally absent.
+ * Visible editor area in window coordinates. Updated from layout, not from
+ * snapshot state, so a scroll frame does not recompose the note. The menu
+ * reads [top] and [bottom] inside [PopupPositionProvider.calculatePosition].
+ */
+internal class VisibleViewport {
+    var top: Int = 0
+    var bottom: Int = 0
+}
+
+internal val LocalSelectionViewport = staticCompositionLocalOf<VisibleViewport?> { null }
+
+/**
+ * Telegram-style selection bubble. Primary row is Cut / Copy / overflow.
+ * Paste lives on the overflow page, first, and only when the clipboard has
+ * text. The formatting list can grow to ten rows; at most six stay visible
+ * and the rest scroll. Back stays put under the scroller. Active styles
+ * carry a check. Quote is intentionally absent.
  */
 @Composable
 fun SelectionActionsPopup(
@@ -97,6 +113,7 @@ fun SelectionActionsPopup(
     onMono: () -> Unit,
     onLink: () -> Unit,
     onPlain: () -> Unit,
+    menuAlpha: () -> Float = { 1f },
 ) {
     // Filled during popup measure, before the window is positioned. Not state:
     // a new size must not recompose the editor on the next key.
@@ -106,6 +123,7 @@ fun SelectionActionsPopup(
         endHandle = endHandle,
         onDismiss = onDismiss,
         reserve = reserve,
+        menuAlpha = menuAlpha,
     ) {
         val canPaste = LocalClipboardManager.current.hasText()
         SubcomposeLayout { constraints ->
@@ -114,15 +132,15 @@ fun SelectionActionsPopup(
                 val menuConstraints = constraints.copy(minWidth = 0, minHeight = 0)
                 val primary = subcompose(ReservePrimary) {
                     PrimaryMenu(
-                        canPaste = canPaste,
                         onCut = onCut,
                         onCopy = onCopy,
-                        onPaste = onPaste,
                         onMore = onMore,
                     )
                 }.first().measure(menuConstraints)
                 val overflowPage = subcompose(ReserveOverflow) {
                     OverflowMenu(
+                        canPaste = canPaste,
+                        onPaste = onPaste,
                         activeStyles = activeStyles,
                         onHidden = onHidden,
                         onSelectAll = onSelectAll,
@@ -158,6 +176,8 @@ fun SelectionActionsPopup(
                 ) { formatting ->
                     if (formatting) {
                         OverflowMenu(
+                            canPaste = canPaste,
+                            onPaste = onPaste,
                             activeStyles = activeStyles,
                             onHidden = onHidden,
                             onSelectAll = onSelectAll,
@@ -172,10 +192,8 @@ fun SelectionActionsPopup(
                         )
                     } else {
                         PrimaryMenu(
-                            canPaste = canPaste,
                             onCut = onCut,
                             onCopy = onCopy,
-                            onPaste = onPaste,
                             onMore = onMore,
                         )
                     }
@@ -199,6 +217,7 @@ private fun SelectionBubble(
     endHandle: Rect,
     onDismiss: () -> Unit,
     reserve: PlateReserve = emptyPlateReserve,
+    menuAlpha: () -> Float = { 1f },
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -206,6 +225,8 @@ private fun SelectionBubble(
     val marginPx = with(density) { MenuScreenMargin.roundToPx() }
     val shadowRoom = softShadowRoom(10.dp)
     val shadowPadPx = with(density) { shadowRoom.roundToPx() }
+    val viewport = LocalSelectionViewport.current
+    val alphaNow = rememberUpdatedState(menuAlpha)
     Popup(
         popupPositionProvider = object : PopupPositionProvider {
             override fun calculatePosition(
@@ -214,6 +235,7 @@ private fun SelectionBubble(
                 layoutDirection: LayoutDirection,
                 popupContentSize: IntSize,
             ): IntOffset {
+                val view = viewport
                 return placeSelectionMenu(
                     anchorBounds = anchorBounds,
                     windowSize = windowSize,
@@ -224,6 +246,8 @@ private fun SelectionBubble(
                     marginPx = marginPx,
                     shadowPadPx = shadowPadPx,
                     reserve = reserve.size,
+                    viewportTop = view?.top ?: 0,
+                    viewportBottom = view?.bottom ?: windowSize.height,
                 )
             }
         },
@@ -259,7 +283,9 @@ private fun SelectionBubble(
                     .background(plate),
             ) {
                 KeepMenuAboveHandles()
-                content()
+                Box(Modifier.graphicsLayer { alpha = alphaNow.value.invoke() }) {
+                    content()
+                }
             }
         }
     }
@@ -342,6 +368,9 @@ internal fun placeSelectionMenu(
     marginPx: Int,
     shadowPadPx: Int,
     reserve: IntSize,
+    viewportTop: Int = 0,
+    viewportBottom: Int = windowSize.height,
+    gapBelowPx: Int = gapPx,
 ): IntOffset {
     val selLeft = min(startHandle.left, endHandle.left)
     val selRight = max(startHandle.right, endHandle.right)
@@ -366,25 +395,29 @@ internal fun placeSelectionMenu(
         rawCenter.coerceIn(0, windowSize.width.coerceAtLeast(0))
     }
     val x = centerX - plateWidth / 2 - shadowPadPx
-    val above = anchorBounds.top + selTop - gapPx - reserved.height >= marginPx
-    val y = if (above) {
-        val bottom = anchorBounds.top + selTop.toInt() - gapPx
-        val minBottom = marginPx + reserved.height
-        val maxBottom = windowSize.height - marginPx
-        val clamped = if (minBottom <= maxBottom) bottom.coerceIn(minBottom, maxBottom) else bottom
-        clamped - plateHeight - shadowPadPx
-    } else {
-        val top = anchorBounds.top + selBottom.toInt() + gapPx + 18
-        val minTop = marginPx
-        val maxTop = windowSize.height - marginPx - reserved.height
-        val clamped = if (minTop <= maxTop) {
-            top.coerceIn(minTop, maxTop)
-        } else {
-            top.coerceIn(0, windowSize.height.coerceAtLeast(0))
+    val selTopWin = anchorBounds.top + selTop
+    val selBottomWin = anchorBounds.top + selBottom
+    val viewTop = viewportTop
+    val viewBottom = if (viewportBottom > viewportTop) viewportBottom else windowSize.height
+    val reservedHeight = reserved.height
+    val plateTop = when {
+        selBottomWin < viewTop -> (viewTop + marginPx).toFloat()
+        selTopWin > viewBottom -> (viewBottom - marginPx - plateHeight).toFloat()
+        else -> {
+            val aboveTop = max(selTopWin, viewTop.toFloat()) - gapPx - reservedHeight
+            if (aboveTop >= viewTop + marginPx) {
+                max(selTopWin, viewTop.toFloat()) - gapPx - plateHeight
+            } else {
+                val belowTop = min(selBottomWin, viewBottom.toFloat()) + gapBelowPx
+                if (belowTop + reservedHeight <= viewBottom - marginPx) {
+                    belowTop
+                } else {
+                    (viewTop + marginPx).toFloat()
+                }
+            }
         }
-        clamped - shadowPadPx
     }
-    return IntOffset(x, y)
+    return IntOffset(x, plateTop.toInt() - shadowPadPx)
 }
 
 /**
@@ -463,10 +496,8 @@ private fun liftSelectionMenuWindow(root: View): Boolean {
 
 @Composable
 private fun PrimaryMenu(
-    canPaste: Boolean,
     onCut: () -> Unit,
     onCopy: () -> Unit,
-    onPaste: () -> Unit,
     onMore: () -> Unit,
 ) {
     // Labels take only the width left after the divider and the ⋮ button.
@@ -479,7 +510,6 @@ private fun PrimaryMenu(
         ) {
             BubbleLabel("Вырезать", onCut)
             BubbleLabel("Копировать", onCopy)
-            if (canPaste) BubbleLabel("Вставить", onPaste)
         }
         Box(
             modifier = Modifier
@@ -525,6 +555,8 @@ private fun BubbleLabel(text: String, onClick: () -> Unit) {
 
 @Composable
 private fun OverflowMenu(
+    canPaste: Boolean,
+    onPaste: () -> Unit,
     activeStyles: Set<MarkStyle>,
     onHidden: () -> Unit,
     onSelectAll: () -> Unit,
@@ -560,6 +592,7 @@ private fun OverflowMenu(
                     .menuScrollFades(scroll, plate),
             ) {
                 Column(Modifier.verticalScroll(scroll)) {
+                    if (canPaste) OverflowLabel("Вставить", onClick = onPaste)
                     OverflowLabel("Выбрать всё", onClick = onSelectAll)
                     OverflowLabel("Обычный", onClick = onPlain)
                     OverflowLabel("Жирный", checked = MarkStyle.BOLD in activeStyles, onClick = onBold)

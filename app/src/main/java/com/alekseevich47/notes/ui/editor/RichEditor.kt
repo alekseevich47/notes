@@ -21,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,7 +73,10 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.text.AnnotatedString
@@ -99,7 +104,11 @@ import com.alekseevich47.notes.domain.TextMark
 import com.alekseevich47.notes.log.AppLog
 import com.alekseevich47.notes.ui.theme.NotesFont
 import com.alekseevich47.notes.ui.components.LinkDialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.alekseevich47.notes.ui.theme.NotesPurple
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
@@ -187,11 +196,17 @@ internal fun RichNoteEditor(
     var pendingReveal by remember { mutableStateOf(false) }
     val bring = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
+    val menuState = remember { SelectionMenuState(scope) }
+    val gestures = remember { EditorGestureCallbacks() }
     val density = LocalDensity.current
+    val view = LocalView.current
+    val tapWait = LocalViewConfiguration.current.doubleTapTimeoutMillis.coerceAtMost(260L)
     var textCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var menuOverflow by remember { mutableStateOf(false) }
-    var menuVisible by remember { mutableStateOf(false) }
+    var caretHold by remember { mutableStateOf(false) }
+    val caretHoldJob = remember { object { var job: Job? = null } }
     var pasteAnchor by remember { mutableStateOf<Rect?>(null) }
+    val pasteGuard = remember { intArrayOf(0) }
     var linkDraft by remember { mutableStateOf<TextRange?>(null) }
     var blockMenu by remember { mutableStateOf(false) }
     val prompt = remember { HiddenPromptGuard() }
@@ -215,11 +230,9 @@ internal fun RichNoteEditor(
         hiddenUnlocked = hiddenUnlocked,
     )
     val spoilerModifier = spoiler.modifier
-    if (field.selection.collapsed && (menuOverflow || menuVisible)) {
+    if (field.selection.collapsed && menuOverflow) {
         menuOverflow = false
-        menuVisible = false
     }
-    var releasePlatformMenu by remember { mutableStateOf(false) }
     var blockFocused by remember { mutableStateOf(false) }
     LaunchedEffect(blockMenu) {
         if (blockMenu) {
@@ -227,12 +240,19 @@ internal fun RichNoteEditor(
             blockMenu = false
         }
     }
-    LaunchedEffect(releasePlatformMenu) {
-        if (!releasePlatformMenu) return@LaunchedEffect
-        withFrameNanos { }
-        if (!releasePlatformMenu) return@LaunchedEffect
-        toolbar.suppressPlatform = false
-        releasePlatformMenu = false
+    LaunchedEffect(formats.scrolling) {
+        menuState.onScroll(formats.scrolling)
+    }
+    LaunchedEffect(formats.autoScrolling) {
+        menuState.setAutoScrolling(formats.autoScrolling)
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) pasteAnchor = null
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
     if (pinDialogVisible) {
         prompt.dialogOpen = true
@@ -249,7 +269,6 @@ internal fun RichNoteEditor(
     }
 
     fun hideMenu() {
-        menuVisible = false
         menuOverflow = false
         pasteAnchor = null
     }
@@ -275,24 +294,24 @@ internal fun RichNoteEditor(
 
     fun collapseSelection() {
         blockMenu = true
-        toolbar.suppressPlatform = true
-        releasePlatformMenu = false
-        if (!field.selection.collapsed) {
-            field = field.copy(selection = TextRange(field.selection.end))
+        val old = field.selection
+        if (!old.collapsed) {
+            field = field.copy(selection = TextRange(old.end))
             clearPendingStyles()
+            menuState.onSelectionChanged(old, field.selection)
         }
-        toolbar.hide()
+        toolbar.dismissQuietly()
         hideMenu()
     }
 
     fun placeCaret(offset: Int) {
         val cursor = offset.coerceIn(0, field.text.length)
         blockMenu = true
-        toolbar.suppressPlatform = true
-        releasePlatformMenu = false
-        if (field.selection != TextRange(cursor)) clearPendingStyles()
+        val old = field.selection
+        if (old != TextRange(cursor)) clearPendingStyles()
         field = field.copy(selection = TextRange(cursor))
-        toolbar.hide()
+        if (old != field.selection) menuState.onSelectionChanged(old, field.selection)
+        toolbar.dismissQuietly()
         hideMenu()
         if (
             !hiddenUnlocked &&
@@ -409,15 +428,43 @@ internal fun RichNoteEditor(
     }
 
     fun selectAll() {
-        releasePlatformMenu = false
         if (field.text.isEmpty()) {
             hideMenu()
             return
         }
         // Primary row (cut / copy / …), not the overflow the button lives in.
         menuOverflow = false
-        menuVisible = true
+        val old = field.selection
+        toolbar.markSelectionShown()
         field = field.copy(selection = TextRange(0, field.text.length))
+        menuState.onSelectionChanged(old, field.selection)
+    }
+
+    fun rectInWindow(offset: Int): Rect? {
+        val result = layout ?: return null
+        val coords = textCoordinates ?: return null
+        if (!coords.isAttached) return null
+        val length = result.layoutInput.text.length
+        val rect = result.getCursorRect(offset.coerceIn(0, length))
+        val topLeft = coords.localToWindow(rect.topLeft)
+        val bottomRight = coords.localToWindow(rect.bottomRight)
+        return Rect(topLeft.x, topLeft.y, bottomRight.x, bottomRight.y)
+    }
+
+    fun extendActiveEdge(dy: Float) {
+        val result = layout ?: return
+        if (!menuState.dragging) return
+        val edge = if (menuState.activeIsEnd) field.selection.end else field.selection.start
+        val next = extendSelectionOffset(result, edge, dy)
+        val updated = if (menuState.activeIsEnd) {
+            TextRange(menuState.anchor, next)
+        } else {
+            TextRange(next, menuState.anchor)
+        }
+        if (updated == field.selection) return
+        val old = field.selection
+        field = field.copy(selection = updated)
+        menuState.onSelectionChanged(old, updated)
     }
 
     val clearPaste = remember { { pasteAnchor = null } }
@@ -471,29 +518,6 @@ internal fun RichNoteEditor(
                         placeCaret(result.getOffsetForPosition(local))
                     }
                 },
-                onGestureSettle = settle@{ cleared, collapsedAtDown, root ->
-                    if (cleared || !collapsedAtDown || root == null) {
-                        if (cleared) {
-                            toolbar.suppressPlatform = true
-                            releasePlatformMenu = false
-                        }
-                        return@settle
-                    }
-                    val coords = textCoordinates
-                    val result = layout
-                    if (coords == null || !coords.isAttached || result == null) return@settle
-                    val local = root - coords.localToRoot(Offset.Zero)
-                    if (
-                        pointInsideTextBounds(
-                            local.x,
-                            local.y,
-                            result.size.width.toFloat(),
-                            result.size.height.toFloat(),
-                        )
-                    ) {
-                        releasePlatformMenu = true
-                    }
-                },
             ),
         )
         if (blockFocused && !formats.editingCell) {
@@ -510,31 +534,29 @@ internal fun RichNoteEditor(
             }
             formats.activeStyles = stylesTouching(marks, field.selection)
             formats.listActive = lineNumbered(field.text, field.selection.min)
+            formats.dragging = menuState.dragging
+            formats.caretRectInWindow = { rectInWindow(field.selection.end) }
+            formats.activeEdgeRectInWindow = {
+                if (!menuState.dragging) null
+                else rectInWindow(if (menuState.activeIsEnd) field.selection.end else field.selection.start)
+            }
+            formats.extendActiveEdge = { dy -> extendActiveEdge(dy) }
         }
     }
     toolbar.onSelectionGestureEnded = {
-        if (!field.selection.collapsed) {
-            menuOverflow = false
-            menuVisible = true
-        }
+        menuState.onHandleDragEnded()
+        if (!field.selection.collapsed) menuOverflow = false
     }
     toolbar.onSelectionGestureBegan = {
-        menuVisible = false
+        menuState.onHandleDragBegan()
     }
-    toolbar.onPasteMenu = { _ ->
-        val result = layout
-        if (result != null) {
-            val cursor = field.selection.end.coerceIn(0, field.text.length)
-            pasteAnchor = result.getCursorRect(cursor)
-        }
-    }
-    toolbar.onPasteMenuHidden = clearPaste
 
-    BackHandler(enabled = !field.selection.collapsed || menuVisible || pasteAnchor != null) {
+    BackHandler(enabled = !field.selection.collapsed || menuState.shouldCompose || pasteAnchor != null) {
         collapseSelection()
     }
 
     fun scheduleReveal(result: TextLayoutResult) {
+        if (menuState.dragging || formats.dragging) return
         if (!pendingReveal || readOnly || !blockFocused) return
         val laidOut = result.layoutInput.text.text
         if (laidOut != field.text) return
@@ -544,15 +566,99 @@ internal fun RichNoteEditor(
         scope.launch { bring.bringIntoView(rect) }
     }
 
+    fun holdCaret() {
+        caretHold = true
+        caretHoldJob.job?.cancel()
+        caretHoldJob.job = scope.launch {
+            delay(tapWait)
+            caretHold = false
+        }
+    }
+
+    gestures.onTapUp = {
+        if (field.selection.collapsed) holdCaret()
+        scope.launch {
+            withFrameNanos { }
+            if (blockFocused && !formats.editingCell) formats.caretToken++
+        }
+    }
+    gestures.onDoubleTap = doubleTap@{ pos ->
+        caretHoldJob.job?.cancel()
+        caretHold = true
+        val result = layout
+        val range = result?.let { WordBounds.at(field.text, it.getOffsetForPosition(pos)) }
+        if (result == null || range == null) {
+            caretHold = false
+            return@doubleTap
+        }
+        if (!hiddenUnlocked && HiddenText.cursorInside(marks, range.start, range.end)) {
+            requestUnlock()
+            caretHold = false
+            return@doubleTap
+        }
+        scope.launch {
+            withFrameNanos { }
+            val old = field.selection
+            field = field.copy(selection = range)
+            menuOverflow = false
+            toolbar.markSelectionShown()
+            menuState.onSelectionChanged(old, range)
+            pasteAnchor = null
+            caretHold = false
+        }
+    }
+    gestures.onLongPress = longPress@{ pos ->
+        val result = layout ?: return@longPress
+        val offset = result.getOffsetForPosition(pos)
+        val onGlyph = glyphHit(result, pos, 0f)
+        val word = WordBounds.at(field.text, offset)
+        val hiddenWord = word != null &&
+            !hiddenUnlocked &&
+            HiddenText.cursorInside(marks, word.start, word.end)
+        if (word != null && onGlyph && !hiddenWord) SelectionHaptics.tick(view)
+        if (
+            !hiddenWord &&
+            field.selection.collapsed &&
+            !readOnly &&
+            !pinDialogVisible &&
+            clipboard.hasText() &&
+            isBlankLongPress(field.text, offset, onGlyph)
+        ) {
+            pasteGuard[0] = 1
+            pasteAnchor = result.getCursorRect(offset.coerceIn(0, field.text.length))
+            scope.launch {
+                withFrameNanos { }
+                pasteGuard[0] = 0
+            }
+        }
+    }
+    gestures.onGestureEnd = {}
+
     InterceptPlatformTextInput(interceptor = tableBackspace) {
     Column(modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth()) {
-            CompositionLocalProvider(LocalTextToolbar provides toolbar) {
+            val selectionColors = LocalTextSelectionColors.current
+            val shownColors = if (caretHold) {
+                TextSelectionColors(
+                    handleColor = Color.Transparent,
+                    backgroundColor = selectionColors.backgroundColor,
+                )
+            } else {
+                selectionColors
+            }
+            CompositionLocalProvider(
+                LocalTextToolbar provides toolbar,
+                LocalTextSelectionColors provides shownColors,
+            ) {
                 applyIncoming = incoming@{ next ->
                     if (readOnly) return@incoming
                     val previous = field.text
                     val previousSelection = field.selection
-                    if (next.text != previous || next.selection != previousSelection) {
+                    val textChanged = next.text != previous
+                    val selectionMoved = next.selection != previousSelection
+                    if (pasteGuard[0] == 1 && !textChanged && next.selection.collapsed) {
+                        pasteGuard[0] = 0
+                    } else if (textChanged || selectionMoved) {
                         pasteAnchor = null
                     }
                     if (blockMenu && next.text == previous) {
@@ -614,13 +720,12 @@ internal fun RichNoteEditor(
                     }
                     fieldNow.current = field
                     if (resolvedText != previous) {
-                        toolbar.suppressPlatform = false
-                        releasePlatformMenu = false
                         if (blockFocused) pendingReveal = true
                     }
-                    // The menu waits for finger-up. Compose asks the toolbar to show only
-                    // after the selection gesture ends; showing here covers the magnifier.
-                    if (selection.collapsed) hideMenu()
+                    if (selection != previousSelection) {
+                        menuState.onSelectionChanged(previousSelection, selection)
+                    }
+                    if (selection.collapsed) menuOverflow = false
                     val slice = if (shortcut == null) textInsertion(previous, resolvedText) else null
                     var nextMarks = shortcut?.marks ?: listedMarks
                     var kind = if (shortcut != null) {
@@ -697,6 +802,7 @@ internal fun RichNoteEditor(
                             if (it.isFocused) {
                                 formats.bodyFocused = true
                                 formats.editingCell = false
+                                formats.caretToken++
                             } else {
                                 formats.bodyFocused = false
                                 clearPendingStyles()
@@ -706,28 +812,13 @@ internal fun RichNoteEditor(
                         .then(spoilerModifier)
                         .followLinkTaps(
                             marks = marks,
-                            menuVisible = menuVisible,
+                            menuVisible = menuState.shouldCompose,
                             layout = layout,
                             hiddenUnlocked = hiddenUnlocked,
                         )
-                        .onWordDoubleTap { pos ->
-                            val result = layout ?: return@onWordDoubleTap
-                            val range = WordBounds.at(field.text, result.getOffsetForPosition(pos))
-                                ?: return@onWordDoubleTap
-                            if (!hiddenUnlocked && HiddenText.cursorInside(marks, range.start, range.end)) {
-                                requestUnlock()
-                                return@onWordDoubleTap
-                            }
-                            scope.launch {
-                                withFrameNanos { }
-                                field = field.copy(selection = range)
-                                menuOverflow = false
-                                menuVisible = true
-                                pasteAnchor = null
-                            }
-                        },
+                        .editorTapGestures(gestures),
                     textStyle = bodyStyle,
-                    cursorBrush = SolidColor(NotesPurple),
+                    cursorBrush = SolidColor(if (caretHold) Color.Transparent else NotesPurple),
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Sentences,
                         autoCorrectEnabled = true,
@@ -759,7 +850,7 @@ internal fun RichNoteEditor(
             val shown = layout?.takeIf {
                 !field.selection.collapsed && it.layoutInput.text.isNotEmpty()
             }
-            if (shown != null && menuVisible) {
+            if (shown != null && menuState.shouldCompose) {
                 val length = shown.layoutInput.text.length
                 val start = field.selection.min.coerceIn(0, length)
                 val end = field.selection.max.coerceIn(0, length)
@@ -773,7 +864,8 @@ internal fun RichNoteEditor(
                         onCopy = { copySelection() },
                         onPaste = { pasteSelection() },
                         onMore = { menuOverflow = true },
-                        onDismiss = { if (menuVisible) collapseSelection() },
+                        onDismiss = { if (menuState.shouldCompose) collapseSelection() },
+                        menuAlpha = { menuState.alpha.value },
                         onBack = { menuOverflow = false },
                         onHidden = { applyMark(MarkStyle.HIDDEN) },
                         onSelectAll = { selectAll() },
@@ -861,33 +953,33 @@ private class HiddenPromptGuard {
 }
 
 /**
- * Selection uses the in-app bubble. Compose shows its floating toolbar when a
- * selection gesture ends and hides it while the finger is down, so those calls
- * open and close the bubble. A collapsed caret with something to paste opens
- * [PasteActionPopup]. The platform toolbar is never shown. Select all is never
- * forwarded.
+ * Selection uses the in-app bubble. Compose hides the toolbar when a handle
+ * drag starts and shows it again when the finger lifts. Paste is not opened
+ * from here. The platform toolbar is never shown.
  */
 internal class RoutingTextToolbar(
     private val platform: TextToolbar,
 ) : TextToolbar {
     private var selectionMenu = false
-    private var pasteMenu = false
-    var suppressPlatform = false
     var onSelectionGestureEnded: () -> Unit = {}
     var onSelectionGestureBegan: () -> Unit = {}
-    var onPasteMenu: (rect: Rect) -> Unit = {}
-    var onPasteMenuHidden: () -> Unit = {}
+
+    fun markSelectionShown() {
+        selectionMenu = true
+    }
+
+    fun dismissQuietly() {
+        selectionMenu = false
+        platform.hide()
+    }
 
     override val status: TextToolbarStatus
-        get() = if (selectionMenu || pasteMenu) TextToolbarStatus.Shown else platform.status
+        get() = if (selectionMenu) TextToolbarStatus.Shown else platform.status
 
     override fun hide() {
         val gestureBegan = selectionMenu
-        val pasteWasShown = pasteMenu
         selectionMenu = false
-        pasteMenu = false
         platform.hide()
-        if (pasteWasShown) onPasteMenuHidden()
         if (gestureBegan) onSelectionGestureBegan()
     }
 
@@ -899,34 +991,15 @@ internal class RoutingTextToolbar(
         onSelectAllRequested: (() -> Unit)?,
     ) {
         val ranged = onCopyRequested != null || onCutRequested != null
-        if (ranged) {
-            val gestureEnded = !selectionMenu
-            if (pasteMenu) {
-                pasteMenu = false
-                onPasteMenuHidden()
-            }
-            selectionMenu = true
-            platform.hide()
-            if (gestureEnded) onSelectionGestureEnded()
-            return
-        }
-        selectionMenu = false
-        if (
-            !shouldOfferPlatformPaste(
-                hasCopy = false,
-                hasCut = false,
-                hasPaste = onPasteRequested != null,
-                suppressPlatform = suppressPlatform,
-            )
-        ) {
-            pasteMenu = false
-            onPasteMenuHidden()
+        if (!ranged) {
+            selectionMenu = false
             platform.hide()
             return
         }
-        pasteMenu = true
+        val gestureEnded = !selectionMenu
+        selectionMenu = true
         platform.hide()
-        onPasteMenu(rect)
+        if (gestureEnded) onSelectionGestureEnded()
     }
 }
 

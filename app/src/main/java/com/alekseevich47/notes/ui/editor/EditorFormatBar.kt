@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
@@ -59,6 +60,18 @@ class NoteEditorController {
     var screenDialogOpen by mutableStateOf(false)
     var linkDialogCount by mutableIntStateOf(0)
     val dialogOpen: Boolean get() = screenDialogOpen || linkDialogCount > 0
+    var bodyScrolling by mutableStateOf(false)
+    var tableScrolling by mutableStateOf(false)
+    val scrolling: Boolean get() = bodyScrolling || tableScrolling
+    var tableMenuOpen by mutableStateOf(false)
+    var caretToken by mutableIntStateOf(0)
+    var dragging by mutableStateOf(false)
+    var autoScrolling by mutableStateOf(false)
+    var activeEdgeRectInWindow: () -> Rect? = { null }
+    var extendActiveEdge: (Float) -> Unit = {}
+    var caretRectInWindow: () -> Rect? = { null }
+    var restoreImeForCell: () -> Unit = {}
+    var requestCloseTableMenu: () -> Unit = {}
     var bold: () -> Unit = {}
     var italic: () -> Unit = {}
     var underline: () -> Unit = {}
