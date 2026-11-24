@@ -40,6 +40,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
+import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.ui.theme.NotesPurple
 
@@ -68,8 +69,12 @@ class NoteEditorController {
     var dragging by mutableStateOf(false)
     var autoScrolling by mutableStateOf(false)
     var activeEdgeRectInWindow: () -> Rect? = { null }
+    var activeLineHeightPx: () -> Float = { 0f }
     var extendActiveEdge: (Float) -> Unit = {}
     var caretRectInWindow: () -> Rect? = { null }
+    var documentSelectToken by mutableIntStateOf(0)
+    var cellCaretBefore: BlockCaret? = null
+    var cellCaretAfter: BlockCaret? = null
     var restoreImeForCell: () -> Unit = {}
     var requestCloseTableMenu: () -> Unit = {}
     var bold: () -> Unit = {}

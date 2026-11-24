@@ -138,6 +138,7 @@ internal fun RichNoteEditor(
     onDeleteTableAbove: (Int) -> Unit = {},
     caretToken: Int = 0,
     caretOffset: Int = 0,
+    documentSelectToken: Int = 0,
     listStart: Int = 1,
 ) {
     var field by remember {
@@ -145,6 +146,8 @@ internal fun RichNoteEditor(
     }
     val fieldNow = remember { FieldSlot(field) }
     fieldNow.current = field
+    val forcedSelection = remember { RangeSlot() }
+    var appliedDocumentSelect by remember { mutableIntStateOf(0) }
     val deleteTableAbove = rememberUpdatedState(onDeleteTableAbove)
     val tableAbove = rememberUpdatedState(hasTableAbove)
     val blockIndexNow = rememberUpdatedState(blockIndex)
@@ -234,6 +237,34 @@ internal fun RichNoteEditor(
         menuOverflow = false
     }
     var blockFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(documentSelectToken) {
+        if (documentSelectToken == 0) {
+            if (
+                appliedDocumentSelect != 0 &&
+                field.text.isNotEmpty() &&
+                field.selection.min == 0 &&
+                field.selection.max == field.text.length
+            ) {
+                val old = field.selection
+                field = field.copy(selection = TextRange(old.end))
+                fieldNow.current = field
+                menuState.onSelectionChanged(old, field.selection)
+            }
+            appliedDocumentSelect = 0
+            return@LaunchedEffect
+        }
+        if (documentSelectToken == appliedDocumentSelect || text.isEmpty()) return@LaunchedEffect
+        appliedDocumentSelect = documentSelectToken
+        if (field.selection.min == 0 && field.selection.max == field.text.length) return@LaunchedEffect
+        val old = field.selection
+        field = field.copy(selection = TextRange(0, field.text.length))
+        fieldNow.current = field
+        if (blockFocused) {
+            menuOverflow = false
+            toolbar.markSelectionShown()
+        }
+        menuState.onSelectionChanged(old, field.selection)
+    }
     LaunchedEffect(blockMenu) {
         if (blockMenu) {
             withFrameNanos { }
@@ -432,6 +463,10 @@ internal fun RichNoteEditor(
             hideMenu()
             return
         }
+        if (selectAllStep(field.selection, field.text.length) == SelectAllStep.DOCUMENT) {
+            formats.documentSelectToken += 1
+            return
+        }
         // Primary row (cut / copy / …), not the overflow the button lives in.
         menuOverflow = false
         val old = field.selection
@@ -456,11 +491,12 @@ internal fun RichNoteEditor(
         if (!menuState.dragging) return
         val edge = if (menuState.activeIsEnd) field.selection.end else field.selection.start
         val next = extendSelectionOffset(result, edge, dy)
-        val updated = if (menuState.activeIsEnd) {
+        val raw = if (menuState.activeIsEnd) {
             TextRange(menuState.anchor, next)
         } else {
             TextRange(next, menuState.anchor)
         }
+        val updated = snapDraggedSelection(field.text, field.selection, raw)
         if (updated == field.selection) return
         val old = field.selection
         field = field.copy(selection = updated)
@@ -540,6 +576,15 @@ internal fun RichNoteEditor(
                 if (!menuState.dragging) null
                 else rectInWindow(if (menuState.activeIsEnd) field.selection.end else field.selection.start)
             }
+            formats.activeLineHeightPx = {
+                val result = layout
+                if (result == null || result.lineCount == 0) 0f
+                else {
+                    val offset = field.selection.end.coerceIn(0, result.layoutInput.text.length)
+                    val line = result.getLineForOffset(offset)
+                    result.getLineBottom(line) - result.getLineTop(line)
+                }
+            }
             formats.extendActiveEdge = { dy -> extendActiveEdge(dy) }
         }
     }
@@ -576,6 +621,7 @@ internal fun RichNoteEditor(
     }
 
     gestures.onTapUp = {
+        forcedSelection.range = null
         if (field.selection.collapsed) holdCaret()
         scope.launch {
             withFrameNanos { }
@@ -586,7 +632,7 @@ internal fun RichNoteEditor(
         caretHoldJob.job?.cancel()
         caretHold = true
         val result = layout
-        val range = result?.let { WordBounds.at(field.text, it.getOffsetForPosition(pos)) }
+        val range = result?.let { pressedWord(field.text, it, pos) }
         if (result == null || range == null) {
             caretHold = false
             return@doubleTap
@@ -599,25 +645,47 @@ internal fun RichNoteEditor(
         scope.launch {
             withFrameNanos { }
             val old = field.selection
+            forcedSelection.range = range
             field = field.copy(selection = range)
             menuOverflow = false
             toolbar.markSelectionShown()
             menuState.onSelectionChanged(old, range)
             pasteAnchor = null
             caretHold = false
+            withFrameNanos { }
+            forcedSelection.range = null
         }
     }
     gestures.onLongPress = longPress@{ pos ->
         val result = layout ?: return@longPress
         val offset = result.getOffsetForPosition(pos)
         val onGlyph = glyphHit(result, pos, 0f)
-        val word = WordBounds.at(field.text, offset)
+        val word = pressedWord(field.text, result, pos)
         val hiddenWord = word != null &&
             !hiddenUnlocked &&
             HiddenText.cursorInside(marks, word.start, word.end)
-        if (word != null && onGlyph && !hiddenWord) SelectionHaptics.tick(view)
+        if (hiddenWord) {
+            requestUnlock()
+            return@longPress
+        }
+        if (word != null) {
+            SelectionHaptics.tick(view)
+            menuState.onHandleDragBegan()
+            scope.launch {
+                withFrameNanos { }
+                val old = field.selection
+                forcedSelection.range = word
+                field = field.copy(selection = word)
+                menuOverflow = false
+                toolbar.markSelectionShown()
+                menuState.onSelectionChanged(old, word)
+                pasteAnchor = null
+                withFrameNanos { }
+                forcedSelection.range = null
+            }
+            return@longPress
+        }
         if (
-            !hiddenWord &&
             field.selection.collapsed &&
             !readOnly &&
             !pinDialogVisible &&
@@ -632,7 +700,13 @@ internal fun RichNoteEditor(
             }
         }
     }
-    gestures.onGestureEnd = {}
+    gestures.onGestureEnd = {
+        scope.launch {
+            withFrameNanos { }
+            forcedSelection.range = null
+            menuState.onHandleDragEnded()
+        }
+    }
 
     InterceptPlatformTextInput(interceptor = tableBackspace) {
     Column(modifier.fillMaxWidth()) {
@@ -708,11 +782,14 @@ internal fun RichNoteEditor(
                     }
                     val resolvedText = shortcut?.text ?: edit.text
                     val resolvedCursor = (shortcut?.cursor ?: edit.cursor).coerceIn(0, resolvedText.length)
+                    val forced = forcedSelection.range
                     val selection = when {
                         shortcut != null -> TextRange(resolvedCursor)
-                        edit.text == next.text -> next.selection
+                        forced != null && resolvedText == previous -> forced
+                        edit.text == next.text -> snapDraggedSelection(resolvedText, previousSelection, next.selection)
                         else -> TextRange(edit.cursor.coerceIn(0, edit.text.length))
                     }
+                    if (resolvedText != previous) forcedSelection.range = null
                     field = if (resolvedText != next.text) {
                         TextFieldValue(resolvedText, selection, composition = null)
                     } else {
@@ -850,7 +927,7 @@ internal fun RichNoteEditor(
             val shown = layout?.takeIf {
                 !field.selection.collapsed && it.layoutInput.text.isNotEmpty()
             }
-            if (shown != null && menuState.shouldCompose) {
+            if (shown != null && menuState.shouldCompose && blockFocused) {
                 val length = shown.layoutInput.text.length
                 val start = field.selection.min.coerceIn(0, length)
                 val end = field.selection.max.coerceIn(0, length)
@@ -920,6 +997,8 @@ internal fun RichNoteEditor(
 }
 
 private class FieldSlot(var current: TextFieldValue)
+
+private class RangeSlot(var range: TextRange? = null)
 
 private class TableBackspaceConnection(
     delegate: InputConnection,

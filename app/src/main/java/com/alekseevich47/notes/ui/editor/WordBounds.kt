@@ -27,6 +27,17 @@ internal object WordBounds {
         return range.takeIf { it.length > 0 }
     }
 
+    /**
+     * Word that contains [offset] itself. A space or punctuation after a word
+     * does not count: that is how a handle decides whether to jump.
+     */
+    fun occupied(text: String, offset: Int): TextRange? {
+        if (text.isEmpty() || offset < 0 || offset >= text.length) return null
+        val start = codePointStart(text, offset)
+        if (!inWord(text, start)) return null
+        return expand(text, start).takeIf { it.length > 0 }
+    }
+
     private fun codePointStart(text: String, offset: Int): Int {
         if (offset <= 0) return 0
         if (offset >= text.length) return text.length

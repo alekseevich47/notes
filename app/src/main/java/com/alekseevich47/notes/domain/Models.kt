@@ -179,8 +179,16 @@ data class Note(
     val searchBlob: String,
 )
 
-/** Caret in [NoteDocuments.flow] after a structural edit. */
-data class BlockCaret(val blockIndex: Int, val offset: Int)
+/**
+ * Caret in [NoteDocuments.flow] after a structural edit.
+ * [cellRow] and [cellCol] are set when the caret sits in a table cell.
+ */
+data class BlockCaret(
+    val blockIndex: Int,
+    val offset: Int,
+    val cellRow: Int = -1,
+    val cellCol: Int = -1,
+)
 
 object NoteDocuments {
     private val json = Json {

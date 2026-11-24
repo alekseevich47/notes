@@ -194,12 +194,13 @@ class EditorViewModel @Inject constructor(
         setDocument(NoteDocuments.pack(blocks), kind, insertion, caret)
     }
 
-    fun updateTable(table: NoteTable) {
+    fun updateTable(table: NoteTable, caretBefore: BlockCaret? = null, caretAfter: BlockCaret? = null) {
         val current = _note.value ?: return
         val blocks = NoteDocuments.flow(current.document).map { block ->
             if (block.table?.id == table.id) block.copy(table = table) else block
         }
-        setDocument(NoteDocuments.pack(blocks))
+        if (caretAfter != null) liveCaret = caretAfter
+        setDocument(NoteDocuments.pack(blocks), caret = caretBefore)
     }
 
     fun removeTable(id: String) {
