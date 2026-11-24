@@ -61,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -113,6 +114,13 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import com.alekseevich47.notes.domain.BlockCaret
 import com.alekseevich47.notes.domain.MarkEdits
 import com.alekseevich47.notes.domain.MarkStyle
 import com.alekseevich47.notes.domain.NoteTable
@@ -266,11 +274,31 @@ internal fun TableBlock(
     onRequestUnlock: () -> Unit,
     pinDialogVisible: Boolean = false,
     surface: NoteSurfaceBridge? = null,
+    caretToken: Int = 0,
+    caretRow: Int = -1,
+    caretCol: Int = -1,
+    caretOffset: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val rows = NoteTables.normalized(table.cells)
     val width = rows.firstOrNull()?.size ?: 0
     var active by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    fun moveCellFocus(row: Int, col: Int, shift: Boolean): Boolean {
+        if (width == 0 || rows.isEmpty()) return false
+        var index = row * width + col
+        val total = rows.size * width
+        repeat(total) {
+            index += if (shift) -1 else 1
+            if (index !in 0 until total) return false
+            val nextRow = index / width
+            val nextCol = index % width
+            if (!NoteTables.covered(table, nextRow, nextCol)) {
+                active = nextRow to nextCol
+                return true
+            }
+        }
+        return false
+    }
     var menu by remember { mutableStateOf<TableMenu?>(null) }
     val cellPaste = remember { HashMap<Pair<Int, Int>, () -> Unit>() }
     SideEffect {
@@ -548,6 +576,13 @@ internal fun TableBlock(
                                         val key = span.row to span.col
                                         if (action == null) cellPaste.remove(key) else cellPaste[key] = action
                                     },
+                                    onTab = { shift -> moveCellFocus(span.row, span.col, shift) },
+                                    caretToken = if (caretToken > 0 && caretRow == span.row && caretCol == span.col) {
+                                        caretToken
+                                    } else {
+                                        0
+                                    },
+                                    caretOffset = caretOffset,
                                 )
                             }
                         }
@@ -863,6 +898,9 @@ private fun TableCellEditor(
     onFocused: (Boolean) -> Unit,
     onCellMenu: () -> Unit,
     onRegisterPaste: ((() -> Unit)?) -> Unit = {},
+    onTab: (Boolean) -> Boolean = { false },
+    caretToken: Int = 0,
+    caretOffset: Int = 0,
 ) {
     val value = table.cells.getOrNull(row)?.getOrNull(col).orEmpty()
     val marks = NoteTables.cellMarks(table, row, col)
@@ -877,6 +915,8 @@ private fun TableCellEditor(
     val scope = rememberCoroutineScope()
     val menuState = remember { SelectionMenuState(scope) }
     val gestures = remember { EditorGestureCallbacks() }
+    val forcedSelection = remember { CellRangeSlot() }
+    var consumedCaret by remember { mutableIntStateOf(0) }
     val caretHoldJob = remember { object { var job: Job? = null } }
     val focusRequester = remember { FocusRequester() }
     val view = LocalView.current
@@ -892,8 +932,22 @@ private fun TableCellEditor(
     val filled = NoteTables.filled(table, row, col)
     val borderColor by animateColorAsState(if (highlighted) TableBlue else gridLine, tween(180), label = "cell-border")
     val borderWidth by androidx.compose.animation.core.animateDpAsState(if (highlighted) 1.6.dp else 0.6.dp, label = "cell-stroke")
-    LaunchedEffect(value) {
-        if (value != field.text) field = TextFieldValue(value, TextRange(value.length.coerceAtMost(field.selection.end)))
+    LaunchedEffect(value, caretToken) {
+        if (caretToken > 0 && caretToken != consumedCaret) return@LaunchedEffect
+        if (value != field.text) {
+            field = TextFieldValue(value, TextRange(value.length.coerceAtMost(field.selection.end)))
+        }
+    }
+    LaunchedEffect(caretToken) {
+        if (caretToken <= 0 || caretToken == consumedCaret) return@LaunchedEffect
+        consumedCaret = caretToken
+        val cursor = caretOffset.coerceIn(0, value.length)
+        field = TextFieldValue(value, TextRange(cursor))
+        runCatching { focusRequester.requestFocus() }
+        keyboard?.show()
+    }
+    LaunchedEffect(focused) {
+        if (focused && !readOnly) runCatching { focusRequester.requestFocus() }
     }
     if (field.selection.collapsed && menuOverflow) menuOverflow = false
     LaunchedEffect(formats.scrolling) { menuState.onScroll(formats.scrolling) }
@@ -933,10 +987,22 @@ private fun TableCellEditor(
         } else {
             shifted
         }
-        field = next
-        if (next.selection != previousSelection) menuState.onSelectionChanged(previousSelection, next.selection)
-        if (next.selection.collapsed) menuOverflow = false
-        if (next.text != value || nextMarks != marks) publish(next.text, nextMarks, next.selection)
+        val forced = forcedSelection.range
+        val selection = when {
+            forced != null && next.text == previous -> forced
+            next.text == previous -> snapDraggedSelection(next.text, previousSelection, next.selection)
+            else -> next.selection
+        }
+        if (next.text != previous) forcedSelection.range = null
+        val adjusted = next.copy(selection = selection)
+        field = adjusted
+        if (selection != previousSelection) menuState.onSelectionChanged(previousSelection, selection)
+        if (selection.collapsed) menuOverflow = false
+        if (next.text != value || nextMarks != marks) {
+            formats.cellCaretBefore = BlockCaret(blockIndex, previousSelection.end, row, col)
+            formats.cellCaretAfter = BlockCaret(blockIndex, selection.end, row, col)
+            publish(adjusted.text, nextMarks, selection)
+        }
     }
     fun apply(style: MarkStyle) {
         val start = field.selection.min
@@ -982,7 +1048,8 @@ private fun TableCellEditor(
         if (!menuState.dragging) return
         val edge = if (menuState.activeIsEnd) field.selection.end else field.selection.start
         val next = extendSelectionOffset(result, edge, dy)
-        val updated = if (menuState.activeIsEnd) TextRange(menuState.anchor, next) else TextRange(next, menuState.anchor)
+        val raw = if (menuState.activeIsEnd) TextRange(menuState.anchor, next) else TextRange(next, menuState.anchor)
+        val updated = snapDraggedSelection(field.text, field.selection, raw)
         if (updated == field.selection) return
         val old = field.selection
         field = field.copy(selection = updated)
@@ -1011,6 +1078,15 @@ private fun TableCellEditor(
             if (!menuState.dragging) null
             else rectInWindow(if (menuState.activeIsEnd) field.selection.end else field.selection.start)
         }
+        formats.activeLineHeightPx = {
+            val result = layout
+            if (result == null || result.lineCount == 0) 0f
+            else {
+                val offset = field.selection.end.coerceIn(0, result.layoutInput.text.length)
+                val line = result.getLineForOffset(offset)
+                result.getLineBottom(line) - result.getLineTop(line)
+            }
+        }
         formats.extendActiveEdge = { dy -> extendActiveEdge(dy) }
         formats.restoreImeForCell = { keyboard?.show() }
     }
@@ -1037,6 +1113,7 @@ private fun TableCellEditor(
         }
     }
     gestures.onTapUp = {
+        forcedSelection.range = null
         if (field.selection.collapsed) holdCaret()
         scope.launch {
             withFrameNanos { }
@@ -1047,7 +1124,7 @@ private fun TableCellEditor(
         caretHoldJob.job?.cancel()
         caretHold = true
         val result = layout
-        val range = result?.let { WordBounds.at(field.text, it.getOffsetForPosition(pos)) }
+        val range = result?.let { pressedWord(field.text, it, pos) }
         if (result == null || range == null) {
             caretHold = false
             return@doubleTap
@@ -1060,22 +1137,47 @@ private fun TableCellEditor(
         scope.launch {
             withFrameNanos { }
             val old = field.selection
+            forcedSelection.range = range
             field = field.copy(selection = range)
             menuOverflow = false
             toolbar.markSelectionShown()
             menuState.onSelectionChanged(old, range)
             caretHold = false
+            withFrameNanos { }
+            forcedSelection.range = null
         }
     }
     gestures.onLongPress = longPress@{ pos ->
         val result = layout ?: return@longPress
-        val offset = result.getOffsetForPosition(pos)
-        val onGlyph = glyphHit(result, pos, 0f)
-        val word = WordBounds.at(field.text, offset)
+        val word = pressedWord(field.text, result, pos)
         val hiddenWord = word != null && !hiddenUnlocked && HiddenText.cursorInside(marks, word.start, word.end)
-        if (word != null && onGlyph && !hiddenWord) SelectionHaptics.tick(view)
+        if (hiddenWord) {
+            onRequestUnlock()
+            return@longPress
+        }
+        if (word != null) {
+            SelectionHaptics.tick(view)
+            menuState.onHandleDragBegan()
+            scope.launch {
+                withFrameNanos { }
+                val old = field.selection
+                forcedSelection.range = word
+                field = field.copy(selection = word)
+                menuOverflow = false
+                toolbar.markSelectionShown()
+                menuState.onSelectionChanged(old, word)
+                withFrameNanos { }
+                forcedSelection.range = null
+            }
+        }
     }
-    gestures.onGestureEnd = {}
+    gestures.onGestureEnd = {
+        scope.launch {
+            withFrameNanos { }
+            forcedSelection.range = null
+            menuState.onHandleDragEnded()
+        }
+    }
     val cellStyle = MaterialTheme.typography.bodyMedium.copy(
         fontFamily = NotesFont,
         color = ink,
@@ -1151,6 +1253,11 @@ private fun TableCellEditor(
                     .fillMaxWidth()
                     .onGloballyPositioned { textCoordinates = it }
                     .focusRequester(focusRequester)
+                    .onPreviewKeyEvent { event ->
+                        event.type == KeyEventType.KeyDown &&
+                            event.key == Key.Tab &&
+                            onTab(event.isShiftPressed)
+                    }
                     .onFocusChanged { state ->
                         if (state.isFocused) formats.caretToken++
                         onFocused(state.isFocused)
@@ -1179,7 +1286,7 @@ private fun TableCellEditor(
                 },
             )
         }
-        if (layout != null && menuState.shouldCompose && !field.selection.collapsed) {
+        if (focused && layout != null && menuState.shouldCompose && !field.selection.collapsed) {
             val shown = layout!!
             val length = shown.layoutInput.text.length
             val start = field.selection.min.coerceIn(0, length)
@@ -1275,6 +1382,8 @@ private fun TableCellEditor(
         }
     }
 }
+
+private class CellRangeSlot(var range: TextRange? = null)
 
 private class CellPrompt {
     var open: Boolean = false

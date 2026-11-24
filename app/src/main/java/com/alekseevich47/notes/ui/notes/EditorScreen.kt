@@ -43,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -92,6 +93,7 @@ import com.alekseevich47.notes.ui.components.TableSizeDialog
 import com.alekseevich47.notes.ui.editor.EditorFormatBar
 import com.alekseevich47.notes.ui.editor.LocalSelectionViewport
 import com.alekseevich47.notes.ui.editor.VisibleViewport
+import com.alekseevich47.notes.ui.editor.autoScrollStep
 import com.alekseevich47.notes.ui.editor.autoScrollVelocity
 import com.alekseevich47.notes.ui.editor.ListAutoFormat
 import com.alekseevich47.notes.ui.editor.NoteEditorController
@@ -112,7 +114,13 @@ import java.time.format.DateTimeFormatter
 
 private enum class HiddenPinStage { UNLOCK, CREATE, CONFIRM }
 
-private data class CaretRequest(val token: Int = 0, val blockIndex: Int = 0, val offset: Int = 0)
+private data class CaretRequest(
+    val token: Int = 0,
+    val blockIndex: Int = 0,
+    val offset: Int = 0,
+    val cellRow: Int = -1,
+    val cellCol: Int = -1,
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -150,9 +158,16 @@ fun EditorScreen(
             token = caretRequest.token + 1,
             blockIndex = jump.caret.blockIndex,
             offset = jump.caret.offset,
+            cellRow = jump.caret.cellRow,
+            cellCol = jump.caret.cellCol,
         )
     }
     val surface = remember { NoteSurfaceBridge() }
+    DisposableEffect(surface) {
+        val clearDocumentSelection = { formats.documentSelectToken = 0 }
+        surface.addBodyDownListener(clearDocumentSelection)
+        onDispose { surface.removeBodyDownListener(clearDocumentSelection) }
+    }
     var bodyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     SideEffect {
         surface.toRoot = { local ->
@@ -355,7 +370,6 @@ fun EditorScreen(
                         }
                     }
                 } }
-                val updateTable = remember(viewModel) { viewModel::updateTable }
                 CompositionLocalProvider(LocalSelectionViewport provides selectionViewport) {
                 Box(
                     Modifier
@@ -393,8 +407,13 @@ fun EditorScreen(
                                         onAskTable = onAskTable,
                                         hasTableAbove = flow.getOrNull(index - 1)?.kind == BlockKind.TABLE,
                                         onDeleteTableAbove = onDeleteTableAbove,
-                                        caretToken = if (caretRequest.blockIndex == index) caretRequest.token else 0,
+                                        caretToken = if (caretRequest.blockIndex == index && caretRequest.cellRow < 0) {
+                                            caretRequest.token
+                                        } else {
+                                            0
+                                        },
                                         caretOffset = if (caretRequest.blockIndex == index) caretRequest.offset else 0,
+                                        documentSelectToken = formats.documentSelectToken,
                                         listStart = listStartFor(flow, index),
                                     )
                                     BlockKind.TABLE -> {
@@ -410,7 +429,23 @@ fun EditorScreen(
                                                 readOnly = unreadable,
                                                 hiddenUnlocked = unlocked,
                                                 formats = formats,
-                                                onChange = updateTable,
+                                                onChange = { next ->
+                                                    val before = formats.cellCaretBefore
+                                                    val after = formats.cellCaretAfter
+                                                    formats.cellCaretBefore = null
+                                                    formats.cellCaretAfter = null
+                                                    viewModelNow.value.updateTable(next, before, after)
+                                                },
+                                                caretToken = if (
+                                                    caretRequest.blockIndex == index && caretRequest.cellRow >= 0
+                                                ) {
+                                                    caretRequest.token
+                                                } else {
+                                                    0
+                                                },
+                                                caretRow = caretRequest.cellRow,
+                                                caretCol = caretRequest.cellCol,
+                                                caretOffset = caretRequest.offset,
                                                 onDelete = onDelete,
                                                 onAskTable = onAskTable,
                                                 onRequestUnlock = onRequestUnlock,
@@ -613,13 +648,10 @@ fun EditorScreen(
         val zone = with(density) { 56.dp.toPx() }
         val minSpeed = with(density) { 80.dp.toPx() }
         val maxSpeed = with(density) { 900.dp.toPx() }
-        var lastFrame = 0L
         var heldStart = 0L
         while (isActive && formats.dragging) {
             val frame = withFrameNanos { it }
             if (heldStart == 0L) heldStart = frame
-            val dt = if (lastFrame == 0L) 0f else (frame - lastFrame) / 1_000_000_000f
-            lastFrame = frame
             val rect = formats.activeEdgeRectInWindow()
             if (rect == null) {
                 formats.autoScrolling = false
@@ -634,12 +666,14 @@ fun EditorScreen(
                 maxPxPerSec = maxSpeed,
                 heldMillis = (frame - heldStart) / 1_000_000L,
             )
-            if (velocity == 0f || dt == 0f) {
+            if (velocity == 0f) {
                 formats.autoScrolling = false
                 continue
             }
             formats.autoScrolling = true
-            val dy = velocity * dt
+            val line = formats.activeLineHeightPx().takeIf { it > 1f }
+                ?: with(density) { 20.dp.toPx() }
+            val dy = autoScrollStep(line, velocity)
             scroll.scrollBy(dy)
             formats.extendActiveEdge(dy)
         }
@@ -742,6 +776,7 @@ private fun NoteTextBlock(
     onDeleteTableAbove: (Int) -> Unit,
     caretToken: Int = 0,
     caretOffset: Int = 0,
+    documentSelectToken: Int = 0,
     listStart: Int = 1,
 ) {
     val publishText = rememberUpdatedState(onText)
@@ -770,6 +805,7 @@ private fun NoteTextBlock(
         onDeleteTableAbove = onDeleteTableAbove,
         caretToken = caretToken,
         caretOffset = caretOffset,
+        documentSelectToken = documentSelectToken,
         listStart = listStart,
     )
 }

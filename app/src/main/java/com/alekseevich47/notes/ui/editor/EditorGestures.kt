@@ -6,9 +6,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -78,7 +80,7 @@ internal fun Modifier.editorTapGestures(callbacks: EditorGestureCallbacks): Modi
                         nextX = up.x,
                         nextY = up.y,
                         gapLimit = gapLimit,
-                        reach = slop * 2f,
+                        reach = 24.dp.toPx(),
                     )
                 ) {
                     callbacksNow.onDoubleTap(up)
@@ -156,6 +158,12 @@ internal fun isBlankLongPress(text: String, offset: Int, onGlyph: Boolean): Bool
     }
     if (start !in text.indices) return true
     return !Character.isLetterOrDigit(text.codePointAt(start))
+}
+
+/** Word under the finger. The character itself has to belong to the word. */
+internal fun pressedWord(text: String, layout: TextLayoutResult, position: Offset): TextRange? {
+    if (!glyphHit(layout, position, 0f)) return null
+    return WordBounds.occupied(text, layout.getOffsetForPosition(position))
 }
 
 /** True when the finger is on glyphs, not the empty tail of the line. */
